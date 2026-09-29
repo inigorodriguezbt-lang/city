@@ -8,6 +8,7 @@
 // Fire jumps to neighbouring buildings and trees, helped by the wind.
 // Forests: burning tree cells spread downwind through dense woods, get
 // knocked down by rain and fire helicopters, and leave the cells treeless.
+import { START_DAY } from '../../core/constants';
 import { BFlag, type Building } from '../../core/types';
 import type { RNG } from '../../core/rng';
 import { buildingDef } from '../../data/buildings';
@@ -117,7 +118,7 @@ export class FireManager {
   /** daily random ignitions; returns the buildings that caught fire */
   daily(world: World, rng: RNG, risk: number): Building[] {
     const started: Building[] = [];
-    if (world.time.day < 20 || world.buildings.size === 0) return started;
+    if (world.time.day - START_DAY < 20 || world.buildings.size === 0) return started;
     const sim = this.game.sim;
     // policy fire-risk multiplier (smoke detectors etc.) from the simulation
     const detectors = (b: Building): number => {

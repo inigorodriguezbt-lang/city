@@ -13,8 +13,8 @@ const MIN_PITCH = 0.06;
 const MAX_PITCH = 1.5;
 const CLEARANCE = 4;
 const DEFAULT_YAW = Math.PI * 0.25;
-const DEFAULT_PITCH = 0.9;
-const DEFAULT_DISTANCE = 600;
+const DEFAULT_PITCH = 0.66;
+const DEFAULT_DISTANCE = 440;
 
 interface Flight {
   fx0: number;

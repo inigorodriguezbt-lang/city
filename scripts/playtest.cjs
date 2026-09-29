@@ -23,7 +23,7 @@ const log = (...a) => console.log('[playtest]', ...a);
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
   page.on('pageerror', (e) => errors.push('pageerror: ' + (e.stack || e.message)));
-  const shot = async (name) => { const p = path.join(out, name + '.png'); await page.screenshot({ path: p }); log('shot', p); };
+  const shot = async (name) => { const p = path.join(out, name + '.png'); await page.screenshot({ path: p, timeout: 180000 }); log('shot', p); };
   const ev = (fn, arg) => page.evaluate(fn, arg);
 
   // 1. main menu
@@ -100,16 +100,19 @@ const log = (...a) => console.log('[playtest]', ...a);
   await page.waitForTimeout(4000);
   await shot('03-built');
 
-  // 4. run the simulation fast
-  await ev(() => window.__game.sim.setSpeed(4));
+  // 4. grow the city: fast-forward in chunks (headless rendering is too slow for real-time growth)
   const samples = [];
   const steps = quick ? 3 : Math.max(3, Math.round(seconds / 10));
   for (let i = 0; i < steps; i++) {
-    await page.waitForTimeout(10000);
-    samples.push(await ev(() => { const w = window.__game.world; return { day: Math.round(w.time.day), pop: w.stats.population, bld: w.buildings.size, money: Math.round(w.economy.money), demand: w.stats.demand, fps: Math.round(window.__game.fps), veh: w.stats.vehicles }; }));
+    const t = Date.now();
+    await ev(() => window.__game.sim.advanceDays(30));
+    await page.waitForTimeout(1500);
+    samples.push(await ev(() => { const w = window.__game.world; return { day: Math.round(w.time.day), pop: w.stats.population, bld: w.buildings.size, money: Math.round(w.economy.money), demand: w.stats.demand, happy: Math.round(w.stats.happiness), jobs: w.stats.jobs, unemployed: w.stats.unemployed, fps: Math.round(window.__game.fps), veh: w.stats.vehicles }; }));
+    samples[samples.length - 1].ms = Date.now() - t;
     log('sample', JSON.stringify(samples[samples.length - 1]));
   }
   await ev(() => window.__game.sim.setSpeed(1));
+  await page.waitForTimeout(4000);
   await shot('04-grown-day');
 
   // 5. commands + time of day

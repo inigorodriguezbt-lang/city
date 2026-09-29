@@ -216,6 +216,7 @@ export class TrafficSystem {
     if (this.modsTimer <= 0) {
       this.modsTimer = 1;
       this.mods = this.readModifiers();
+      this.policyFlags = { biking: this.policyActive('encourage_biking'), truckBan: this.policyActive('heavy_traffic_ban') };
       mover.speedMult = 1 / (1 + 0.55 * Math.max(0, this.mods.trafficMult - 1));
     }
     this.paths.update(dt);
@@ -246,6 +247,18 @@ export class TrafficSystem {
       return this.game.eventSystem?.modifiers() ?? NEUTRAL;
     } catch {
       return NEUTRAL;
+    }
+  }
+
+  /** city-wide traffic policy flags (refreshed with the modifiers) */
+  policyFlags = { biking: false, truckBan: false };
+
+  /** is a city policy active (safe when the sim is unavailable) */
+  policyActive(id: string): boolean {
+    try {
+      return this.game.sim.isPolicyActive(id);
+    } catch {
+      return false;
     }
   }
 
@@ -286,7 +299,7 @@ export class TrafficSystem {
     this.spawnAcc -= attempts;
     if (this.paths.pending > 600) return;
     while (attempts-- > 0 && this.trips < target) {
-      const t = planner.plan(w.time.hour, this.mods.tourismMult);
+      const t = planner.plan(w.time.hour, this.mods.tourismMult, this.policyFlags);
       if (!t) {
         this.stats.spawnFails++;
         continue;

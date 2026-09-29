@@ -1,3 +1,4 @@
+import { START_DAY } from '../core/constants';
 // Milestones (population thresholds that unlock content) and achievements.
 import { MILESTONES } from '../data/milestones';
 import { ACHIEVEMENTS, type AchievementSnapshot } from '../data/achievements';
@@ -84,7 +85,7 @@ export function achievementSnapshot(ctx: SimContext): AchievementSnapshot {
   const inc = op.income, exp = op.expense;
   let roadCells = 0;
   for (let t = 1; t < ctx.roadCounts.length; t++) roadCells += ctx.roadCounts[t] ?? 0;
-  const days = Math.floor(w.time.day);
+  const days = Math.max(0, Math.floor(w.time.day - START_DAY));
   return {
     population: s.population,
     maxPopulation: m.maxPopulation,

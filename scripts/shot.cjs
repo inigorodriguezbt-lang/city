@@ -25,7 +25,7 @@ const { chromium } = require('/opt/node22/lib/node_modules/playwright');
     } catch (e) { console.log('[eval error]', e.message); }
     await page.waitForTimeout(1500);
   }
-  await page.screenshot({ path: out });
+  await page.screenshot({ path: out, timeout: 180000 });
   console.log('saved', out);
   await browser.close();
 })();

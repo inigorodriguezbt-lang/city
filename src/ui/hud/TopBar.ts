@@ -1,3 +1,4 @@
+import { START_DAY } from '../../core/constants';
 // Top HUD bar: city identity + calendar/clock + speed control (left),
 // population / money / happiness / RCIO demand / weather (center),
 // panel shortcuts (right). DOM writes only happen when values change.
@@ -357,7 +358,8 @@ export class TopBar {
     const w = this.ctx.world();
     if (!w) return '';
     const c = calendar(w.time.day);
-    const years = Math.floor(w.time.day / 360), months = Math.floor((w.time.day % 360) / 30);
+    const age = Math.max(0, w.time.day - START_DAY);
+    const years = Math.floor(age / 360), months = Math.floor((age % 360) / 30);
     return richTip({
       title: formatDate(w.time.day),
       subtitle: `${SEASON_NAMES[c.season]} · ${formatHour(w.time.hour, this.ctx.game.settings.value.ui.clock24h)}`,

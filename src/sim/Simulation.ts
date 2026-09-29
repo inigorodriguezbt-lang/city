@@ -12,7 +12,7 @@
 import type { Game } from '../game/Game';
 import type { World } from '../world/World';
 import { BFlag, Layer, RoadType, type Building, type BudgetCategory, type TaxCategory, type ZoneCategory } from '../core/types';
-import { DAYS_PER_MONTH, DAYS_PER_YEAR, START_YEAR, TICKS_PER_DAY } from '../core/constants';
+import { DAYS_PER_MONTH, DAYS_PER_YEAR, START_DAY, START_YEAR, TICKS_PER_DAY } from '../core/constants';
 import { calendar } from '../core/time';
 import { policyDef } from '../data/policies';
 import { achievementDef, ACHIEVEMENTS, type AchievementInfo, type AchievementSnapshot } from '../data/achievements';
@@ -103,7 +103,7 @@ export class Simulation {
     const fresh = world.ext.sim === undefined;
     const state = loadSimState(world);
     // the regional highway / railway the map starts with is maintained by the state
-    if (fresh && world.time.day < 1) {
+    if (fresh && world.time.day < START_DAY + 1) {
       const road = world.road;
       for (let i = 0; i < road.length; i++) if (road[i] === RoadType.Highway || road[i] === RoadType.Rail) state.stateRoads.push(i);
     }

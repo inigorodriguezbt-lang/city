@@ -217,7 +217,7 @@ export class TripPlanner {
    * Plan one trip for the current hour; null when nothing sensible is
    * available (no buildings, no road access, unreachable, rode transit).
    */
-  plan(hour: number, tourismMult: number): TripSpec | null {
+  plan(hour: number, tourismMult: number, policy: { biking: boolean; truckBan: boolean } = { biking: false, truckBan: false }): TripSpec | null {
     const hasOut = this.outside.length > 0;
     const W: number[] = [];
     const home = this.homes.n > 0, work = this.work.n > 0, shop = this.shops.n > 0, leis = this.leisure.n > 0;
@@ -233,6 +233,9 @@ export class TripPlanner {
     W[Purpose.Tourist] = hasOut && (leis || shop) ? (0.04 + 0.2 * g(hour, 13, 3.5)) * tourismMult * Math.min(1.5, this.world.stats.tourists / 800 + 0.2) : 0;
     W[Purpose.Visitor] = hasOut && work ? 0.05 + 0.25 * g(hour, 7.6, 1.2) + 0.2 * g(hour, 17.8, 1.4) : 0;
     W[Purpose.Taxi] = (shop || leis) && home && this.residents > 3000 ? 0.04 + 0.2 * g(hour, 23, 2.2) + 0.08 * g(hour, 18, 3) : 0;
+    // policies: bikes replace some short car trips; truck bans thin out freight
+    if (policy.biking) for (const k of [Purpose.Commute, Purpose.Home, Purpose.Shop, Purpose.Leisure]) W[k] *= 0.85;
+    if (policy.truckBan) for (const k of [Purpose.Freight, Purpose.Export, Purpose.Import]) W[k] *= 0.6;
     let total = 0;
     for (let k = 0; k < W.length; k++) total += W[k] ?? 0;
     if (total <= 0) return null;

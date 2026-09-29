@@ -668,8 +668,10 @@ export class TransitManager {
     const mods = this.ts.modifiers();
     const cover = Math.min(1.4, 0.55 + 0.1 * stops.length);
     const monthly = (res * 0.6 + jobs * 0.4 + vis * 0.15) * APPEAL[line.mode] * cover * Math.sqrt(Math.max(0.5, mods.trafficMult)) * Math.sqrt(Math.max(0.3, mods.tourismMult));
+    // policies: free fares attract riders; priority lanes make buses/trams more attractive
+    const policy = (this.ts.policyActive('free_transit') ? 1.3 : 1) * (this.ts.policyActive('bus_priority') && (line.mode === 'bus' || line.mode === 'tram') ? 1.12 : 1);
     const capacity = line.vehicles * TRANSIT_CAPACITY[line.mode] * 30;
-    return Math.round(Math.min(monthly, capacity));
+    return Math.round(Math.min(monthly * policy, capacity));
   }
 
   monthly(): void {

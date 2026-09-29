@@ -27,6 +27,8 @@ export const DAYS_PER_MONTH = 30;
 export const MONTHS_PER_YEAR = 12;
 export const DAYS_PER_YEAR = DAYS_PER_MONTH * MONTHS_PER_YEAR;
 export const START_YEAR = 2026;
+/** new cities are founded on 1 May (day-of-calendar 120) so the first look is green */
+export const START_DAY = 120;
 /** Simulation ticks per in‑game day. Each tick processes a slice of the city. */
 export const TICKS_PER_DAY = 8;
 

@@ -5,7 +5,7 @@
 // notifications) or through WorldActions (validation, cost, undo).
 // Anything that must persist in saves lives here (use `ext` for module state).
 // ─────────────────────────────────────────────────────────────────────────────
-import { CELL, WATER_EPS } from '../core/constants';
+import { CELL, START_DAY, WATER_EPS } from '../core/constants';
 import type { EventBus } from '../core/EventBus';
 import type { GameEvents } from '../core/events';
 import {
@@ -100,7 +100,7 @@ export class World {
   home: Cell;
 
   // ── simulation state ───────────────────────────────────────────────────
-  time: TimeState = { day: 0, hour: 9, speed: 1 };
+  time: TimeState = { day: START_DAY, hour: 9, speed: 1 };
   weather: WeatherState = { type: 'clear', intensity: 0, temperature: 15, windDir: 0.6, windSpeed: 4, snowCover: 0, nextChange: 6 };
   economy: Economy;
   stats: CityStats = emptyStats();
