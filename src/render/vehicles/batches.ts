@@ -17,7 +17,7 @@ export class Batch {
   private geo: THREE.BufferGeometry;
   private state!: THREE.InstancedBufferAttribute;
 
-  constructor(private src: THREE.BufferGeometry, private material: THREE.Material, private shadow: boolean, private parent: THREE.Object3D, cap = 16) {
+  constructor(src: THREE.BufferGeometry, private material: THREE.Material, private shadow: boolean, private parent: THREE.Object3D, cap = 16) {
     this.geo = new THREE.BufferGeometry();
     for (const name of ['position', 'normal', 'color', 'aMat']) this.geo.setAttribute(name, src.getAttribute(name));
     this.geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e7);

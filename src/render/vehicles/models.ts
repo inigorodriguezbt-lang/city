@@ -8,7 +8,6 @@ import type * as THREE from 'three';
 import { Model, MODEL_COUNT, MODEL_HALF_W, MODEL_LEN } from '../../sim/traffic/types';
 import { Ch, VB } from './builder';
 
-const TIRE = 0x151517;
 const DARK = 0x1d1e21;
 const TRIM = 0x2b2d31;
 const GLASS = 0x1b2530;

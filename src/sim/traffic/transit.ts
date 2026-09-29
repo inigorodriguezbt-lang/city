@@ -6,12 +6,12 @@
 // keeping and monthly ridership estimates for fares.
 import { CELL } from '../../core/constants';
 import { hash2 } from '../../core/rng';
-import { BFlag, RoadType, type Cell, type TransitLine, type TransitMode } from '../../core/types';
+import { BFlag, type Cell, type TransitLine, type TransitMode } from '../../core/types';
 import { buildingDef } from '../../data/buildings';
 import type { World } from '../../world/World';
 import { K } from './graph';
 import { dirBetween } from './lanes';
-import { LINE_COLORS, paintFor } from './palette';
+import { LINE_COLORS } from './palette';
 import type { TrafficSystem } from './TrafficSystem';
 import { End, Start, type FreePath } from './VehicleStore';
 import {
@@ -681,14 +681,9 @@ export class TransitManager {
     this.version++;
   }
 
-  /** stop cell ids (for renderers) */
+  /** a line by id */
   lineOf(id: number): TransitLine | undefined {
     return this.world.transitLines.find((l) => l.id === id);
-  }
-
-  /** is cell a rail/tram-capable road type (for tool snapping text) */
-  static roadName(t: RoadType): string {
-    return t === RoadType.Rail ? 'railway' : t === RoadType.TramAvenue ? 'tram avenue' : 'road';
   }
 }
 
