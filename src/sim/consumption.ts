@@ -42,8 +42,10 @@ export function powerUse(b: Building, def?: BuildingDef): number {
     return 0.2 * f;
   }
   const z = zoneDef(b.zone);
-  const k = z?.category === 'ind' ? 0.035 : z?.category === 'off' ? 0.03 : z?.category === 'com' ? 0.025 : 0.012;
-  return zonedScale(b) * k * f * (mults(b)?.pm ?? 1);
+  // MW per resident / job slot: a 40 MW plant serves ~7,000 residents plus their workplaces
+  const perJob = z?.category === 'ind' ? 0.006 : z?.category === 'off' ? 0.0045 : 0.004;
+  const mw = Math.max(1, b.maxResidents || 0) * 0.0026 + Math.max(0, b.jobs || 0) * perJob;
+  return mw * f * (mults(b)?.pm ?? 1);
 }
 
 /** m³/day water consumed (positive) or produced (negative). */

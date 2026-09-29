@@ -57,7 +57,7 @@ const errors = [];
     zr(2, 9, L - 10, 15, Z.ResMed); zr(2, -9, L - 10, -15, Z.ResLow);
     zr(2, 17, L - 10, 20, Z.ResLow); zr(2, -17, L - 10, -20, Z.ResLow);
     zr(L - 9, -16, L, 16, Z.Industry);
-    const tryPlace = (defId) => {
+    const tryPlace = window.__scPlace = (defId) => {
       for (let i = 2; i <= L; i++) for (const s of [2, -2, 3, -3, 4, -4, 5, -5, 9, -9, 10, -10]) for (let rot = 0; rot < 4; rot++) {
         const p = at(i, s);
         if (A.checkBuilding(defId, p.x, p.y, rot).ok && A.placeBuilding(defId, p.x, p.y, rot).ok) return true;
@@ -77,6 +77,7 @@ const errors = [];
         if (A.checkBuilding('sewage_outlet', x, y, rot).ok) ok = A.placeBuilding('sewage_outlet', x, y, rot).ok;
       }
       res.sewage = ok;
+      window.__scShore = shore;
     }
     res.center = at(10, 0);
     return res;
@@ -86,6 +87,21 @@ const errors = [];
   for (let d = 0; d < days; d += 60) {
     const t = Date.now();
     await ev(() => window.__game.sim.advanceDays(60));
+    // play the city manager: add capacity when utilities run short
+    const added = await ev(() => {
+      const g = window.__game, s = g.world.stats, A = g.actions, out = [];
+      if (s.power.consumed > s.power.produced * 0.85) { if (window.__scPlace('coal_plant')) out.push('coal'); }
+      if (s.water.consumed > s.water.produced * 0.85) { if (window.__scPlace('water_tower')) out.push('water'); if (window.__scPlace('water_tower')) out.push('water'); }
+      if (s.sewage.produced > s.sewage.capacity * 0.85 && window.__scShore) {
+        const sh = window.__scShore; let ok = false;
+        for (let r = 1; r <= 6 && !ok; r++) for (let dy = -r; dy <= r && !ok; dy++) for (let dx = -r; dx <= r && !ok; dx++) for (let rot = 0; rot < 4 && !ok; rot++) {
+          if (A.checkBuilding('sewage_outlet', sh.x + dx, sh.y + dy, rot).ok) ok = A.placeBuilding('sewage_outlet', sh.x + dx, sh.y + dy, rot).ok;
+        }
+        if (ok) out.push('sewage');
+      }
+      return out;
+    });
+    if (added.length) log('added', added.join(','));
     const s = await ev(() => { const w = window.__game.world; return { day: Math.round(w.time.day), pop: w.stats.population, bld: w.buildings.size, happy: Math.round(w.stats.happiness), demand: w.stats.demand, jobs: w.stats.jobs, unemp: w.stats.unemployed, ms: 0 }; });
     s.ms = Date.now() - t;
     log('grow', JSON.stringify(s));

@@ -21,6 +21,11 @@ const sample = new LotSample();
 
 /** Categories whose buildings keep working (at reduced quality) without power. */
 const SOFT_POWER = new Set<string>(['parks', 'plazas', 'landmark', 'monument', 'tourism', 'deathcare']);
+/** Utilities run on backup generators when the grid fails… */
+const BACKUP_POWER = new Set<string>(['water', 'garbage']);
+/** …and keep running with skeleton crews when understaffed (avoids death spirals). */
+const UTILITY_CATS = new Set<string>(['power', 'water']);
+const UTILITY_STAFF_FLOOR = 0.7;
 /** Categories that need running water / sewage to operate properly. */
 const NEEDS_WATER = new Set<string>(['health', 'education', 'tourism', 'government', 'fire']);
 
@@ -190,8 +195,9 @@ export function updateService(ctx: SimContext, b: Building, k: number): void {
 
   // ── efficiency ─────────────────────────────────────────────────────────
   let powerF = 1;
-  if (needsPower(def) && !s.power) powerF = SOFT_POWER.has(cat) ? 0.75 : 0.2;
-  let eff = disabled ? 0 : budget * (STAFF_FLOOR + (1 - STAFF_FLOOR) * staffing) * powerF;
+  if (needsPower(def) && !s.power) powerF = SOFT_POWER.has(cat) ? 0.75 : BACKUP_POWER.has(cat) ? 0.6 : 0.2;
+  const floor = UTILITY_CATS.has(cat) ? UTILITY_STAFF_FLOOR : STAFF_FLOOR;
+  let eff = disabled ? 0 : budget * (floor + (1 - floor) * staffing) * powerF;
   if (cat === 'parks' || cat === 'plazas') eff *= e.parksEfficiency;
   if (onFire) eff *= 0.3;
   if (b.flags & BFlag.Flooded) eff *= 0.5;
