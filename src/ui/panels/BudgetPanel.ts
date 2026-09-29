@@ -279,7 +279,7 @@ export class BudgetPanel extends Panel {
       const s = this.taxSliders.get(t.id)!;
       const rate = w.economy.taxes[t.id] ?? 0;
       s.set(Math.round(rate * 100));
-      const income = this.proj.income[t.id] ?? w.economy.lastIncome[t.id] ?? 0;
+      const income = this.proj.income[t.id] ?? w.economy.lastIncome['taxes:' + t.id] ?? 0;
       total += income;
       const r = Math.round(rate * 100);
       const mood = r > 20 ? ' · residents furious' : r > 12 ? ' · slows demand' : r < 5 ? ' · very attractive' : '';
@@ -303,7 +303,7 @@ export class BudgetPanel extends Panel {
       const s = this.budgetSliders.get(b.id)!;
       const v = w.economy.budgets[b.id] ?? 1;
       s.set(Math.round(v * 100));
-      const cost = this.proj.expense[b.id] ?? w.economy.lastExpense[b.id] ?? 0;
+      const cost = this.proj.expense[b.id] ?? w.economy.lastExpense['upkeep:' + b.id] ?? 0;
       const eff = v < 1 ? 'reduced coverage' : v > 1.25 ? 'max effort' : v > 1 ? 'boosted' : 'normal';
       s.setSub(`${cost ? formatMoney(cost, cost >= 100_000) + '/mo · ' : ''}${eff}`, v < 0.8 ? 'warn' : v > 1 ? 'good' : '');
     }

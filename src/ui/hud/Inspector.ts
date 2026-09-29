@@ -144,6 +144,11 @@ export class Inspector {
 
   update(dt: number): void {
     if (!this.isOpen) return;
+    // the camera drops a follow target when the player pans or jumps away
+    if (this.following && !this.ctx.game.renderer.cameraCtl.following) {
+      this.following = false;
+      if (this.followBtn) setClass(this.followBtn, 'active', false);
+    }
     this.acc += dt;
     const rate = this.vehicleId !== null ? 0.25 : 0.5;
     if (this.acc >= rate) {

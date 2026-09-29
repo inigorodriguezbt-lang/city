@@ -946,11 +946,21 @@ export class WorldActions {
     return steep;
   }
 
+  /** construction is frozen while the city is bankrupt (never in creative) */
+  private bankruptReason(): string | null {
+    const w = this.world;
+    if (!w || w.creative) return null;
+    const sim = this.game.sim as unknown as { bankrupt?: boolean };
+    return sim.bankrupt ? 'The city is bankrupt: balance the budget or take a loan before building' : null;
+  }
+
   placeRoad(path: Cell[], type: RoadType, opts: { replace?: boolean } = {}): ActionResult {
     const w = this.world;
     if (!w) return fail('No city loaded');
     const a = this.analyzeRoad(path, type, !!opts.replace);
     if (!a.ok) return fail(a.reason ?? 'Cannot build here');
+    const broke = a.cost > 0 ? this.bankruptReason() : null;
+    if (broke) return fail(broke);
     const def = roadDef(type);
     const label = a.upgrades.length && a.upgrades.length === a.newCells ? `Upgrade to ${def.name}` : `Build ${def.name}`;
     return this.run(label, (tx, world) => {
@@ -993,6 +1003,8 @@ export class WorldActions {
     }
     if (!todo.length) return fail('Nothing to upgrade');
     cost = Math.round(cost);
+    const broke = cost > 0 ? this.bankruptReason() : null;
+    if (broke) return fail(broke);
     if (!w.canAfford(cost)) return fail(`Not enough money (${formatMoney(cost)} needed)`);
     return this.run(`Upgrade to ${def.name}`, (tx, world) => {
       if (!tx.spend(cost, 'construction')) return fail('Not enough money');
@@ -1300,6 +1312,8 @@ export class WorldActions {
     if (!def) return fail('Unknown building');
     const c = this.checkBuilding(defId, x, y, rot);
     if (!c.ok) return fail(c.reason ?? 'Cannot build here');
+    const broke = this.bankruptReason();
+    if (broke) return fail(broke);
     return this.run(`Build ${def.name}`, (tx, world) => {
       if (!tx.spend(def.cost, 'construction')) return fail('Not enough money');
       for (const id of c.replaces) tx.removeBuilding(id);

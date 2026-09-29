@@ -118,12 +118,8 @@ export class UIManager {
       inGame: () => !!self.world && !game.menus?.isOpen() && !game.chat?.isOpen,
       compact: () => self.el.classList.contains('compact'),
       flyTo: (x, y, distance, instant) => {
+        // CameraController subscribes to camera:flyTo
         game.events.emit('camera:flyTo', { x, y, distance, instant });
-        try {
-          game.renderer.cameraCtl.flyTo(x, y, distance, instant);
-        } catch {
-          /* camera not ready */
-        }
       },
     };
   }
