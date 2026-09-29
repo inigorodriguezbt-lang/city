@@ -80,6 +80,9 @@ export class ChunkBuilder {
   private fr: Frame;
   private fb = new FurnitureBuilder();
   private gmCache = new Map<number, number>();
+  private secCache = new Map<number, Section>();
+  private rowPool: Row[] = [];
+  private rowN = 0;
   private lod = 0;
   private shadow = false;
   private leftHand = false;
@@ -216,6 +219,13 @@ export class ChunkBuilder {
   }
 
   private carSection(own: Profile, style: number, flags: number, bridge: boolean, pavedL: boolean, pavedR: boolean): Section {
+    const key = own.type + style * 16 + flags * 256 + ((bridge ? 1 : 0) + (pavedL ? 2 : 0) + (pavedR ? 4 : 0) + this.lod * 8) * 65536;
+    let sec = this.secCache.get(key);
+    if (!sec) this.secCache.set(key, (sec = this.makeCarSection(own, style, flags, bridge, pavedL, pavedR)));
+    return sec;
+  }
+
+  private makeCarSection(own: Profile, style: number, flags: number, bridge: boolean, pavedL: boolean, pavedR: boolean): Section {
     const cs = this.lod === 0 ? 2 : 1;
     // outer layers: bridge parapet deck, pavers toward a pedestrian street, the
     // ragged gravel fringe of unpaved roads — otherwise zero width (the real
@@ -245,8 +255,19 @@ export class ChunkBuilder {
     const fr = bridge ? 0 : p.fringe;
     const outL = bridge || (pavedL && !bridge) ? eL : back + fr;
     const outR = bridge || (pavedR && !bridge) ? eR : back + fr;
-    const b = [-outL, -back, -(hw + ct), -hw, -mi, mi, hw, hw + ct, back, outR];
-    for (let i = 1; i < b.length; i++) if (b[i] < b[i - 1]) b[i] = b[i - 1];
+    const row = this.nextRow();
+    const b = row.b;
+    b[0] = -outL;
+    b[1] = -back;
+    b[2] = -(hw + ct);
+    b[3] = -hw;
+    b[4] = -mi;
+    b[5] = mi;
+    b[6] = hw;
+    b[7] = hw + ct;
+    b[8] = back;
+    b[9] = outR;
+    for (let i = 1; i < 10; i++) if (b[i] < b[i - 1]) b[i] = b[i - 1];
     let vin: number, vout: number;
     if (bridge) vin = vout = barrier ? ROAD + 0.85 : sl + 0.14;
     else if (fr > 0.01) {
@@ -254,9 +275,28 @@ export class ChunkBuilder {
       vout = SINK;
     } else vin = vout = sl;
     const vL = pavedL && !bridge ? ROAD : NaN, vR = pavedR && !bridge ? ROAD : NaN;
-    const la = [Number.isNaN(vL) ? vout : vL, sl, sl, ROAD, ROAD + CURB, ROAD, sl, sl, Number.isNaN(vR) ? vin : vR];
-    const lb = [Number.isNaN(vL) ? vin : vL, sl, sl, ROAD, ROAD + CURB, ROAD, sl, sl, Number.isNaN(vR) ? vout : vR];
-    return { tau, b, la, lb, hw, mask };
+    const la = row.la, lb = row.lb;
+    la[0] = Number.isNaN(vL) ? vout : vL;
+    lb[0] = Number.isNaN(vL) ? vin : vL;
+    la[1] = lb[1] = la[2] = lb[2] = sl;
+    la[3] = lb[3] = ROAD;
+    la[4] = lb[4] = ROAD + CURB;
+    la[5] = lb[5] = ROAD;
+    la[6] = lb[6] = la[7] = lb[7] = sl;
+    la[8] = Number.isNaN(vR) ? vin : vR;
+    lb[8] = Number.isNaN(vR) ? vout : vR;
+    row.tau = tau;
+    row.hw = hw;
+    row.mask = mask;
+    return row;
+  }
+
+  /** pooled car-section row (valid until the next piece starts: see resetRows) */
+  private nextRow(): Row {
+    let r = this.rowPool[this.rowN];
+    if (!r) this.rowPool[this.rowN] = r = { tau: 0, b: new Array<number>(10).fill(0), la: new Array<number>(9).fill(0), lb: new Array<number>(9).fill(0), hw: 0, mask: 0 };
+    this.rowN++;
+    return r;
   }
 
   /** interpolated profile along a piece (smoothstep between the end profiles) */
@@ -295,6 +335,7 @@ export class ChunkBuilder {
 
   private straight(x: number, y: number, t: RoadType, own: Profile, axis: number, arms: (Profile | null)[]): void {
     const w = this.world;
+    this.rowN = 0;
     const k = axis; // N-S: k=0, E-W: k=1 (canonical N = actual N / E)
     const fr = this.fr.set(x, y, k);
     const dN = k, dS = (k + 2) & 3, dE = (k + 1) & 3, dW = (k + 3) & 3;
@@ -318,7 +359,8 @@ export class ChunkBuilder {
     // rows
     const taus = new Set<number>([0, 16]);
     const taper = (mf & MF.Taper) !== 0;
-    if (taper || fr.raised) for (const v of this.lod === 0 ? [4, 8, 12] : [8]) taus.add(v);
+    if (fr.raised && !bridge) for (let v = this.lod === 0 ? 2 : 4; v < 16; v += this.lod === 0 ? 2 : 4) taus.add(v); // eased approach ramp
+    else if (taper || fr.raised) for (const v of this.lod === 0 ? [4, 8, 12] : [8]) taus.add(v);
     if (bridge) taus.add(8);
     if (M > 0) {
       for (const tp of [tip0, tip1]) {
@@ -341,7 +383,7 @@ export class ChunkBuilder {
       return this.carRow(tau, ipv, e, e, bridge, pedE, pedW, mi, 0xffff, own.sw <= 0.01 && own.type !== RoadType.Pedestrian);
     });
     const outerHigh = bridge || fr.raised || pedE || pedW || rows.some((r) => r.la[0] > 0.06 || r.lb[8] > 0.06);
-    emitRows(this.buf, fr, sec, rows, straightMap, { skirtL: outerHigh, skirtR: outerHigh, bottom: bridge, skirtKind: Kind.Concrete });
+    emitRows(this.buf, fr, sec, rows, straightMap, { skirtL: outerHigh, skirtR: outerHigh, bottom: bridge, skirtKind: Kind.Concrete, walls: this.lod === 0 || bridge });
 
     // ── structures & furniture ──
     const lights = (w.roadFlags[w.idx(x, y)] & 4) === 0;
@@ -377,6 +419,7 @@ export class ChunkBuilder {
 
   private curve(x: number, y: number, t: RoadType, own: Profile, k: number, arms: (Profile | null)[]): void {
     const w = this.world;
+    this.rowN = 0;
     const fr = this.fr.set(x, y, k);
     const dN = k, dE = (k + 1) & 3;
     const p0 = arms[dN] ?? own, p1 = arms[dE] ?? own;
@@ -402,7 +445,7 @@ export class ChunkBuilder {
       rows.push(this.carRow(tau, ipv, ei, eo, bridge, false, false, M, 0xffff, own.sw <= 0.01 && own.type !== RoadType.Pedestrian));
     }
     const outerHigh = bridge || fr.raised || rows.some((r) => r.la[0] > 0.06 || r.lb[8] > 0.06);
-    emitRows(this.buf, fr, sec, rows, curveMap, { skirtL: outerHigh, skirtR: outerHigh, bottom: bridge, skirtKind: Kind.Concrete });
+    emitRows(this.buf, fr, sec, rows, curveMap, { skirtL: outerHigh, skirtR: outerHigh, bottom: bridge, skirtKind: Kind.Concrete, walls: this.lod === 0 || bridge });
     if (t === RoadType.Highway) this.highwayExtras(curveMap, bridge, false, false, p0, p1);
     if (t === RoadType.Pedestrian) this.pedBollards(x, y, arms);
     if (bridge) this.railingsAlong(curveMap, rows, own);
@@ -457,7 +500,7 @@ export class ChunkBuilder {
     // the piece ends at the far rim of the bulb (terrain beyond); isolated cells are a round plaza
     const vEnd = Math.min(16, zc + Rf), vStart = stem ? 0 : zc - Rf;
     const vs = new Set<number>([vStart, vEnd]);
-    const na = this.lod === 0 ? 10 : 5;
+    const na = this.lod === 0 ? 7 : 4;
     const starts: number[] = [];
     const rings: [number, number][] = [[Rb, hw], [Rc, hw + ct], [Rs, hw + sw]];
     if (F > 0) rings.push([Rf, hw + sw + F]);
@@ -499,10 +542,13 @@ export class ChunkBuilder {
       const b = [-outer, -side, -ctop, -asph, -mi, mi, asph, ctop, side, outer];
       const la = [vo, sl, sl, ROAD, ROAD + CURB, ROAD, sl, sl, sl];
       const lb = [sl, sl, sl, ROAD, ROAD + CURB, ROAD, sl, sl, vo];
-      return { tau: v, b, la, lb, hw: Math.max(asph, 0.01), mask: v < markEnd ? 0xffff : 0 };
+      // gravel fringe fades by (|s| − hw): past the bulb rim a negative hw keeps that distance ≈ radial
+      const rim = zc + Rb;
+      const hwr = F > 0 && v > rim ? rim - v : Math.max(asph, 0.01);
+      return { tau: v, b, la, lb, hw: hwr, mask: v < markEnd ? 0xffff : 0 };
     });
     const skirt = fr.raised || rows.some((r) => r.la[0] > 0.06);
-    emitRows(this.buf, fr, sec, rows, straightMap, { skirtL: skirt, skirtR: skirt, bottom: false, skirtKind: Kind.Concrete });
+    emitRows(this.buf, fr, sec, rows, straightMap, { skirtL: skirt, skirtR: skirt, bottom: false, skirtKind: Kind.Concrete, walls: this.lod === 0 });
     if ((w.roadFlags[w.idx(x, y)] & 4) !== 0 || !own.lamps || sw < 0.5) return;
     if (t === RoadType.Highway) return;
     const lv = Math.min(15.6, zc + Rb + Math.min(0.5, sw * 0.3));
@@ -687,7 +733,8 @@ export class ChunkBuilder {
           nu = -nu;
           nv = -nv;
         }
-        const [nx, nz] = fr.dir(nu, nv);
+        fr.d(nu, nv);
+        const nx = fr.DX, nz = fr.DZ;
         fr.w(p.u, p.v);
         const X = fr.X, Z = fr.Z, bh = fr.base(X, Z);
         const top = bh + hi(i);
@@ -701,7 +748,7 @@ export class ChunkBuilder {
         pnz = nz;
       }
     };
-    if (A.ch + B.ch > 0.01) wall(inner, () => ROAD, sideLift, true, Kind.Curb);
+    if (A.ch + B.ch > 0.01 && (this.lod === 0 || bridge)) wall(inner, () => ROAD, sideLift, true, Kind.Curb);
     if (bridge) {
       // deck surface out to the fascia: fan from the cell corner or band to the closed edge
       const vLift = (i: number) => ROAD + chAt(i);
@@ -802,7 +849,7 @@ export class ChunkBuilder {
       lens(hx, hy, hz);
       lens(X + fx * 0.22, gy + 3.1, Z + fz * 0.22);
       // luminaire glow on top of the mast
-      this.fb.glow(X + ax * 0.3, gy + 6.4, Z + az * 0.3, 2.2);
+      this.fb.glow(X + ax * 0.3, gy + 6.4, Z + az * 0.3, 1.5);
     }
   }
 
@@ -816,7 +863,7 @@ export class ChunkBuilder {
     const yaw = Math.atan2(-dz, dx);
     this.fb.add(FT.LampPole, X, y, Z, yaw);
     const hx = X + dx * 1.75, hz = Z + dz * 1.75;
-    this.fb.glow(hx, y + 7.3, hz, 1.6);
+    this.fb.glow(hx, y + 7.3, hz, 1.2);
     this.pool(hx, hz, own.hw > 5 ? 12 : 11, 1);
   }
 
@@ -829,7 +876,7 @@ export class ChunkBuilder {
     this.fb.add(FT.LampDouble, X, y, Z, Math.atan2(-dz, dx));
     for (const s of [1, -1]) {
       const hx = X + dx * 2.05 * s, hz = Z + dz * 2.05 * s;
-      this.fb.glow(hx, y + 8.6, hz, 1.8);
+      this.fb.glow(hx, y + 8.6, hz, 1.35);
       const off = own.type === RoadType.Highway ? 3.6 : 3.4;
       this.pool(X + dx * off * s, Z + dz * off * s, 13, 1);
     }
@@ -841,7 +888,7 @@ export class ChunkBuilder {
     const X = fr.X, Z = fr.Z;
     const y = fr.base(X, Z) + ROAD;
     this.fb.add(FT.LampPed, X, y, Z, 0);
-    this.fb.glow(X, y + 3.93, Z, 1.0);
+    this.fb.glow(X, y + 3.93, Z, 0.8);
     this.pool(X, Z, 6.5, 0.9);
   }
 
@@ -1138,9 +1185,11 @@ export class ChunkBuilder {
       fr.w(o.u, o.v);
       const X = fr.X, Z = fr.Z;
       map(c + 0.1, tau, this.tmp2);
-      const [lx, lz] = fr.dir(this.tmp2.u - o.u, this.tmp2.v - o.v);
-      const bh = fr.base(X, Z);
-      box(buf, X, Z, Math.atan2(-lz, lx), 1.3, 0.12, bh + BALLAST_TOP - 0.04, bh + SLEEPER_TOP, Kind.Sleeper, false, false);
+      fr.d(this.tmp2.u - o.u, this.tmp2.v - o.v);
+      const lx = fr.DX, lz = fr.DZ;
+      const n = fr.normal(X, Z);
+      // instanced concrete sleeper, tilted with the bed, base 4 cm inside the ballast
+      this.fb.addOriented(FT.Sleeper, X, fr.base(X, Z) + BALLAST_TOP - 0.04, Z, lx, lz, n.x, n.y, n.z);
     }
     const seg = curved ? (this.lod === 0 ? 8 : 4) : fr.raised || fr.bridge ? 4 : 1;
     const prof: [number, number][] = [[0.036, 0], [0.036, 0.14], [-0.036, 0.14], [-0.036, 0]];

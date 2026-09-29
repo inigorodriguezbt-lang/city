@@ -3,7 +3,7 @@
 // spires, modern slanted tops, rounded / tapered / twisted futuristic forms.
 import type { RNG } from '../../../core/rng';
 import type { MatKey } from '../types';
-import { LodFacade, WinKind, facCode } from './constants';
+import { LodFacade, WF, WinKind, facCode } from './constants';
 import { type Fab, type P2, ring, roundRect, xformPoly } from './fab';
 import { floorBands, piers } from './blocks';
 import { GROUND, antenna, cornice, flatRoof, greenRoof, helipad, hipRoof, lampPost, lotGround, pad, pagodaRoof, roofClutter, shrubs, sign, tree, withFace } from './parts';
@@ -12,7 +12,7 @@ import { type StyleKit, lightTrim, pickWall, roofColor, styleKit, towerWindows, 
 import { P, type Col, clamp, col, hueCol, shade } from './util';
 
 type Shape = 'box' | 'round' | 'ellipse' | 'twist' | 'taper' | 'stepped';
-type Crown = 'flat' | 'deco' | 'slant' | 'pyramid' | 'spire' | 'ledband' | 'pagoda' | 'garden' | 'helipad';
+type Crown = 'flat' | 'deco' | 'slant' | 'pyramid' | 'spire' | 'ledband' | 'pagoda' | 'garden' | 'helipad' | 'lantern';
 
 function pickShape(k: StyleKit, rng: RNG, floors: number): Shape {
   switch (k.id) {
@@ -29,12 +29,12 @@ function pickCrown(k: StyleKit, rng: RNG, floors: number, shape: Shape): Crown {
   if (shape === 'twist' || shape === 'taper') return rng.pick(['spire', 'garden', 'ledband'] as Crown[]);
   switch (k.id) {
     case 'artdeco': return 'deco';
-    case 'modern': return rng.pick(['slant', 'flat', 'garden', 'ledband'] as Crown[]);
+    case 'modern': return rng.pick(['slant', 'lantern', 'garden', 'ledband'] as Crown[]);
     case 'asian': return floors > 15 ? rng.pick(['pagoda', 'ledband', 'spire'] as Crown[]) : 'flat';
-    case 'american': return floors > 20 ? rng.pick(['pyramid', 'spire', 'flat', 'helipad'] as Crown[]) : 'flat';
-    case 'european': return rng.pick(['flat', 'slant', 'ledband', 'garden'] as Crown[]);
+    case 'american': return floors > 20 ? rng.pick(['pyramid', 'spire', 'lantern', 'helipad'] as Crown[]) : rng.pick(['flat', 'lantern'] as Crown[]);
+    case 'european': return rng.pick(['lantern', 'slant', 'ledband', 'garden'] as Crown[]);
     case 'nordic': return rng.pick(['slant', 'flat', 'pyramid'] as Crown[]);
-    case 'mediterranean': return rng.pick(['flat', 'garden', 'ledband'] as Crown[]);
+    case 'mediterranean': return rng.pick(['lantern', 'garden', 'ledband'] as Crown[]);
     default: return rng.pick(['spire', 'ledband', 'helipad'] as Crown[]);
   }
 }
@@ -196,6 +196,18 @@ export function office(f: Fab): void {
       flatRoof(f, ccx, ccz, cw, cd, top, 1.2, mat, wc, '#5a5f64', lt);
       helipad(f, ccx, top + 1.2, ccz, Math.min(cw, cd) * 0.8);
       break;
+    case 'lantern': {
+      // set-back glass lantern (plant room screen) with a lit crown band
+      if (shape === 'box' || shape === 'stepped') flatRoof(f, ccx, ccz, cw, cd, top, 0.9, mat, wc, '#5a5f64', lt);
+      else f.m().cap('roof_flat', topPts, top + 0.02, '#5a5f64');
+      const lw = cw * 0.7, ld = cd * 0.7, lh = fh * rng.range(1.8, 2.8);
+      f.fbox('wall_glass', facCode(WinKind.Ribbon, 0, Math.min(3.9, lh - 0.6), WF.DarkFrame), ccx, top, ccz, lw, ld, lh, rng.pick(['#9cc4d4', '#a9b8c0', '#b7c9b8']), { fh: lh, base: top, top: 'roof_flat', topColor: '#4a4f54' });
+      f.m().prismWalls('emissive', rectPoly(ccx, ccz, lw + 0.16, ld + 0.16), top + lh - 0.55, top + lh + 0.05, rng.chance(0.6) ? '#f4f0e6' : hueCol(rng.pick([0.55, 0.6, 0.12]), 0.6, 0.6));
+      f.light(ccx, top + lh * 0.6, ccz, 0xeaf6ff, Math.min(lw, ld) * 0.7, 'flood');
+      if (floors > 30) antenna(f, ccx, top + lh, ccz, rng.range(8, 18), true);
+      f.reach(top + lh);
+      break;
+    }
     default:
       if (shape === 'box' || shape === 'stepped') {
         flatRoof(f, ccx, ccz, cw, cd, top, 1.2, mat, wc, '#6f6c66', lt);

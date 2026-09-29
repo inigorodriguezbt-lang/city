@@ -128,12 +128,13 @@ void main() {
 
 const FRAG = /* glsl */ `
 uniform sampler2D uAtlas;
+uniform float uExpComp;
 varying vec2 vUv;
 varying float vFade;
 void main() {
   vec4 c = texture2D(uAtlas, vUv);
   if (c.a < 0.02) discard;
-  gl_FragColor = vec4(c.rgb, c.a * vFade);
+  gl_FragColor = vec4(c.rgb * uExpComp, c.a * vFade);
   #include <colorspace_fragment>
 }
 `;
@@ -169,6 +170,7 @@ export class ProblemIcons {
         uAtlas: { value: atlas },
         uTime: { value: 0 },
         uViewH: { value: 800 },
+        uExpComp: { value: 1 },
         uGrid: { value: new THREE.Vector2(COLS, Math.ceil(PROBLEM_ICONS.length / COLS)) },
       },
       vertexShader: VERT,
@@ -216,9 +218,11 @@ export class ProblemIcons {
     this.geo.instanceCount = list.length;
   }
 
-  update(time: number, viewH: number): void {
+  /** expComp = 1 / scene exposure (icons keep their look through eye adaptation) */
+  update(time: number, viewH: number, expComp = 1): void {
     this.mat.uniforms.uTime.value = time % 10000;
     this.mat.uniforms.uViewH.value = viewH;
+    this.mat.uniforms.uExpComp.value = expComp;
   }
 
   dispose(): void {

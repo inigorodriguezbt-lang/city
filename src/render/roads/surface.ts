@@ -6,7 +6,7 @@
 // and blend linearly toward the shared edge value of neighbouring bridge cells,
 // so a run of decks is one continuous (piecewise-linear) ramp instead of a
 // staircase. Straight land cells in line with a bridge end ramp smoothly from
-// the terrain up to the deck (over one or two cells, smoothstep eased), so a
+// the terrain up to the deck (over one to three cells, smoothstep eased), so a
 // bridge whose deck sits BRIDGE_CLEARANCE above the water is reachable.
 //
 // Vehicles should sample `heightAt(wx, wz)` of this class (see the integration
@@ -18,8 +18,12 @@ import type { World } from '../../world/World';
 
 /** structural depth of a bridge deck below the asphalt (m) */
 export const DECK_THICKNESS = 1.35;
-/** a bridge end steeper than this (m) gets a two-cell approach ramp */
-const LONG_RAMP_RISE = 2.0;
+/** steepest grade between neighbouring deck cells of a straight bridge run */
+const MAX_DECK_GRADE = 0.05;
+/** longest approach ramp (cells) */
+const MAX_RAMP_CELLS = 3;
+/** rise (m) one ramp cell absorbs: the eased profile peaks at 1.5× the mean grade → ≈ 12 % */
+const RISE_PER_CELL = 1.3;
 
 const enum Mode {
   Unknown = 0,
@@ -178,31 +182,77 @@ export class RoadHeightField {
   }
 
   private classifyBridge(cx: number, cy: number, i: number): Mode {
-    const d = this.surface.deck(cx, cy);
     const axis = this.straightAxis(cx, cy);
     if (axis < 0) {
-      this.flats.set(i, d);
+      this.flats.set(i, this.surface.deck(cx, cy));
       return Mode.Flat;
     }
-    const lowDir = axis === 0 ? 0 : 3; // N or W
-    const highDir = axis === 0 ? 2 : 1; // S or E
-    const e0 = this.bridgeEdge(cx, cy, d, lowDir, axis);
-    const e1 = this.bridgeEdge(cx, cy, d, highDir, axis);
-    this.runs.set(i, { axis, d, e0, e1 });
+    this.buildRun(cx, cy, axis);
     return Mode.Run;
   }
 
-  /** surface height at the edge of bridge cell toward `dir` (NaN = follow terrain) */
-  private bridgeEdge(cx: number, cy: number, d: number, dir: number, axis: number): number {
+  /**
+   * Classify a whole straight bridge run at once. Deck heights come from
+   * RoadSurface.deck (clearance over water / banks) and are lifted to their
+   * upper envelope with a bounded grade, so the deck is a smooth, drivable
+   * profile (never lower than required) instead of following per-cell floors.
+   */
+  private buildRun(cx: number, cy: number, axis: number): void {
     const w = this.world;
-    if (!this.connected(cx, cy, dir)) return d;
-    const nx = cx + DIR_DX[dir], ny = cy + DIR_DY[dir];
-    if (w.isBridge(nx, ny)) {
-      const nd = this.surface.deck(nx, ny);
-      return this.straightAxis(nx, ny) === axis ? (d + nd) * 0.5 : nd;
+    const dx = axis === 1 ? 1 : 0, dy = axis === 0 ? 1 : 0;
+    const lowDir = axis === 0 ? 0 : 3; // N or W
+    const highDir = axis === 0 ? 2 : 1; // S or E
+    const inRun = (x: number, y: number): boolean => w.inBounds(x, y) && w.isBridge(x, y) && this.straightAxis(x, y) === axis;
+    let a = 0, b = 0;
+    while (a < 1024 && inRun(cx - dx * (a + 1), cy - dy * (a + 1))) a++;
+    while (b < 1024 && inRun(cx + dx * (b + 1), cy + dy * (b + 1))) b++;
+    const n = a + b + 1;
+    const x0 = cx - dx * a, y0 = cy - dy * a;
+    const raw = new Float64Array(n + 2);
+    for (let k = 0; k < n; k++) raw[k + 1] = this.surface.deck(x0 + dx * k, y0 + dy * k);
+    // connected non-straight bridge cells (flat decks) terminating the run take part in the envelope
+    const bx0 = x0 - dx, by0 = y0 - dy, bx1 = x0 + dx * n, by1 = y0 + dy * n;
+    const flat0 = this.connected(x0, y0, lowDir) && w.isBridge(bx0, by0);
+    const flat1 = this.connected(bx1 - dx, by1 - dy, highDir) && w.isBridge(bx1, by1);
+    raw[0] = flat0 ? this.surface.deck(bx0, by0) : -Infinity;
+    raw[n + 1] = flat1 ? this.surface.deck(bx1, by1) : -Infinity;
+    const D = new Float64Array(n);
+    const step = MAX_DECK_GRADE * CELL;
+    for (let k = 0; k < n; k++) {
+      let h = -Infinity;
+      for (let j = 0; j < n + 2; j++) {
+        const v = raw[j] - step * Math.abs(k + 1 - j);
+        if (v > h) h = v;
+      }
+      D[k] = h;
     }
-    // land neighbour: it ramps up to us if it is straight along our axis
+    for (let k = 0; k < n; k++) {
+      const x = x0 + dx * k, y = y0 + dy * k;
+      const d = D[k];
+      const e0 = k > 0 ? (D[k - 1] + d) * 0.5 : this.runEnd(x, y, d, lowDir, axis, flat0 ? raw[0] : NaN);
+      const e1 = k < n - 1 ? (D[k + 1] + d) * 0.5 : this.runEnd(x, y, d, highDir, axis, flat1 ? raw[n + 1] : NaN);
+      const i = y * w.size + x;
+      this.runs.set(i, { axis, d, e0, e1 });
+      this.mode[i] = Mode.Run;
+    }
+  }
+
+  /** surface height at the outer edge of a run's end cell toward `dir` (NaN = follow terrain) */
+  private runEnd(cx: number, cy: number, d: number, dir: number, axis: number, flatDeck: number): number {
+    if (!this.connected(cx, cy, dir)) return d; // dead end on the deck
+    if (!Number.isNaN(flatDeck)) return flatDeck; // flat junction / curve deck
+    // land neighbour: it ramps up to us if it can (straight along our axis)
+    const nx = cx + DIR_DX[dir], ny = cy + DIR_DY[dir];
     return this.straightAxis(nx, ny) === axis ? d : NaN;
+  }
+
+  /** drivable deck height at the center of bridge cell (x, y) */
+  private deckAt(x: number, y: number): number {
+    const m = this.classify(x, y);
+    const i = y * this.world.size + x;
+    if (m === Mode.Run) return this.runs.get(i)!.d;
+    if (m === Mode.Flat) return this.flats.get(i)!;
+    return this.surface.deck(x, y);
   }
 
   private classifyRamp(cx: number, cy: number, i: number): Mode {
@@ -213,23 +263,30 @@ export class RoadHeightField {
     const edges: RampInfo['edges'] = [];
     for (const dir of dirs) {
       const dx = DIR_DX[dir], dy = DIR_DY[dir];
+      // walk toward the bridge through straight, connected land cells
+      let k = 1;
+      let x = cx, y = cy;
+      let found = false;
+      for (; k <= MAX_RAMP_CELLS; k++) {
+        if (!this.connected(x, y, dir)) break;
+        const nx = cx + dx * k, ny = cy + dy * k;
+        if (!w.inBounds(nx, ny)) break;
+        if (w.isBridge(nx, ny)) {
+          found = true;
+          break;
+        }
+        if (this.straightAxis(nx, ny) !== axis) break;
+        x = nx;
+        y = ny;
+      }
+      if (!found) continue;
+      const bx = cx + dx * k, by = cy + dy * k;
+      const n = this.rampCells(bx, by, (dir + 2) & 3, axis);
+      if (k > n) continue;
       const sign = dir === 1 || dir === 2 ? 1 : -1; // deck toward +axis?
-      // distance-1 bridge
-      const n1x = cx + dx, n1y = cy + dy;
-      if (w.isBridge(n1x, n1y) && this.connected(cx, cy, dir)) {
-        const deck = this.deckEdgeToward(n1x, n1y);
-        const edgeAt = axis === 0 ? (sign > 0 ? (cy + 1) * CELL : cy * CELL) : sign > 0 ? (cx + 1) * CELL : cx * CELL;
-        const len = this.longRamp(cx, cy, dir, deck, edgeAt, axis) ? CELL * 2 : CELL;
-        edges.push({ at: edgeAt, d: deck, len, dir: sign });
-        continue;
-      }
-      // distance-2 bridge through a straight land neighbour needing a long ramp
-      const n2x = cx + 2 * dx, n2y = cy + 2 * dy;
-      if (!w.isBridge(n1x, n1y) && w.isBridge(n2x, n2y) && this.connected(cx, cy, dir) && this.straightAxis(n1x, n1y) === axis && this.connected(n1x, n1y, dir)) {
-        const deck = this.deckEdgeToward(n2x, n2y);
-        const edgeAt = axis === 0 ? (sign > 0 ? (cy + 2) * CELL : (cy - 1) * CELL) : sign > 0 ? (cx + 2) * CELL : (cx - 1) * CELL;
-        if (this.longRamp(n1x, n1y, dir, deck, edgeAt, axis)) edges.push({ at: edgeAt, d: deck, len: CELL * 2, dir: sign });
-      }
+      // deck edge: the bridge cell's border facing us
+      const edgeAt = axis === 0 ? (sign > 0 ? by * CELL : (by + 1) * CELL) : sign > 0 ? bx * CELL : (bx + 1) * CELL;
+      edges.push({ at: edgeAt, d: this.deckAt(bx, by), len: n * CELL, dir: sign });
     }
     if (!edges.length) return Mode.Plain;
     this.ramps.set(i, { axis, edges });
@@ -237,33 +294,39 @@ export class RoadHeightField {
   }
 
   /**
-   * Deck height of bridge cell (bx, by) at its edge facing the ramping land
-   * cell. A straight deck stays flat up to a ramping neighbour (bridgeEdge
-   * returns the center deck there) and a non-straight deck is flat anyway.
+   * Length (cells) of the approach ramp leading away from bridge cell (bx, by)
+   * in direction `away`: long enough to keep the eased grade gentle, limited
+   * by the straight land run available (split fairly with a bridge ahead).
+   * 0 = the land neighbour cannot ramp (not straight / not connected).
    */
-  private deckEdgeToward(bx: number, by: number): number {
-    return this.surface.deck(bx, by);
-  }
-
-  /**
-   * Whether the ramp starting at land cell (rx, ry) (adjacent to the deck edge
-   * at `edgeAt`) should extend over a second cell away from the bridge.
-   */
-  private longRamp(rx: number, ry: number, dirToBridge: number, deck: number, edgeAt: number, axis: number): boolean {
+  private rampCells(bx: number, by: number, away: number, axis: number): number {
     const w = this.world;
-    const ex = axis === 1 ? edgeAt : (rx + 0.5) * CELL;
-    const ez = axis === 0 ? edgeAt : (ry + 0.5) * CELL;
-    if (Math.abs(deck - (w.heightAt(ex, ez) + ROAD_LIFT)) <= LONG_RAMP_RISE) return false;
-    const away = (dirToBridge + 2) & 3;
     const dx = DIR_DX[away], dy = DIR_DY[away];
-    if (!this.connected(rx, ry, away)) return false;
-    // cells at distance 1..3 away from the ramp start must be plain land (gap >= 4 to the next bridge)
-    for (let k = 1; k <= 3; k++) {
-      const x = rx + dx * k, y = ry + dy * k;
-      if (!w.inBounds(x, y)) return k > 1;
-      if (w.isBridge(x, y)) return false;
-      if (k === 1 && (w.roadAt(x, y) === RoadType.None || this.straightAxis(x, y) !== axis)) return false;
+    if (!this.connected(bx, by, away)) return 0;
+    let avail = 0;
+    let x = bx, y = by;
+    for (let j = 1; j <= MAX_RAMP_CELLS; j++) {
+      const nx = bx + dx * j, ny = by + dy * j;
+      if (!w.inBounds(nx, ny) || w.isBridge(nx, ny) || this.straightAxis(nx, ny) !== axis || !this.connected(x, y, away)) break;
+      avail = j;
+      x = nx;
+      y = ny;
     }
-    return true;
+    if (avail === 0) return 0;
+    // another bridge further along the run: both ends share the land between them
+    for (let j = avail + 1; j <= MAX_RAMP_CELLS * 2 + 1; j++) {
+      const nx = bx + dx * j, ny = by + dy * j;
+      if (!w.inBounds(nx, ny) || !w.roadAt(nx, ny)) break;
+      if (w.isBridge(nx, ny)) {
+        avail = Math.min(avail, Math.max(1, Math.floor((j - 1) / 2)));
+        break;
+      }
+      if (this.straightAxis(nx, ny) !== axis) break;
+    }
+    const deck = this.deckAt(bx, by);
+    const ex = axis === 1 ? (away === 1 ? (bx + 1) * CELL : bx * CELL) : (bx + 0.5) * CELL;
+    const ez = axis === 0 ? (away === 2 ? (by + 1) * CELL : by * CELL) : (by + 0.5) * CELL;
+    const rise = Math.abs(deck - (w.heightAt(ex, ez) + ROAD_LIFT));
+    return Math.max(1, Math.min(avail, Math.ceil(rise / RISE_PER_CELL)));
   }
 }

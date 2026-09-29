@@ -196,11 +196,11 @@ float bOcc(int s, uint seed, float lvl, float fl) {
   return o;
 }
 vec3 bLightCol(float r, int s) {
-  vec3 warm = vec3(1.0, 0.56, 0.24), soft = vec3(1.0, 0.7, 0.4), neut = vec3(1.0, 0.85, 0.64), cool = vec3(0.78, 0.88, 1.0);
+  vec3 warm = vec3(1.0, 0.5, 0.19), soft = vec3(1.0, 0.63, 0.3), neut = vec3(1.0, 0.8, 0.56), cool = vec3(0.72, 0.84, 1.0);
   if (s == 3 || s == 5) return r < 0.55 ? cool : r < 0.85 ? neut : soft;
   if (s == 2) return r < 0.4 ? neut : r < 0.75 ? cool : soft;
   if (s == 4) return r < 0.55 ? vec3(1.0, 0.6, 0.26) : cool;
-  return r < 0.45 ? warm : r < 0.8 ? soft : r < 0.93 ? neut : cool;
+  return r < 0.32 ? warm : r < 0.66 ? soft : r < 0.9 ? neut : cool;
 }
 // Flames behind a window: w = window-local coords (0..1, y up). Deep red at
 // the base, orange tongues flickering upward, smoke-darkened head.
@@ -210,13 +210,47 @@ vec3 bFlame(vec2 w, float r) {
   float tongue = smoothstep(0.1, 0.9, 1.0 - w.y + (n - 0.5) * 0.9);
   float flick = 0.75 + 0.25 * bVN(vec2(t * 9.0, r * 50.0));
   vec3 hot = mix(vec3(0.7, 0.07, 0.01), vec3(1.0, 0.4, 0.05), tongue);
-  return hot * (0.2 + 1.5 * tongue * tongue) * flick;
+  return hot * (0.2 + 1.5 * tongue * tongue) * flick * (1.0 - 0.6 * uNight);
 }
-float bLitInten(int s) { return s == 3 ? 2.1 : s == 2 ? 2.4 : s == 4 ? 1.8 : 1.7; }
+// Light output of lit windows. Calibrated for the renderer's night eye
+// adaptation (exposure ≈ ×4 after dusk): lit rooms land around 1–2.5 on screen.
+float bLitInten(int s) { return s == 3 ? 0.64 : s == 2 ? 0.72 : s == 4 ? 0.55 : 0.52; }
 vec3 bSky(vec3 d) {
   vec3 up = mix(uSkyHorizon, uSkyZenith, pow(clamp(d.y, 0.0, 1.0), 0.45));
   vec3 dn = mix(uSkyHorizon * 0.55, uSkyGround, clamp(-d.y * 4.0, 0.0, 1.0));
   return d.y >= 0.0 ? up : dn;
+}
+
+// Procedural advert: two-tone backdrop, a hero disc (product / face), a bold
+// headline and a strap line of blocky "lettering", a frame. uv in metres,
+// h = panel height, r = design seed, t animates screens (scroll + shimmer).
+vec3 bAdArt(vec2 uv, float h, float r, float t, float mpp) {
+  float aa = mpp * 0.75 + 1e-3;
+  vec3 h1 = bHue(r), h2 = bHue(r + 0.33 + fract(r * 5.7) * 0.2);
+  vec3 c1 = h1 * h1 * 0.85 + 0.04, c2 = h2 * h2 * 0.7 + 0.08;
+  bool dark = fract(r * 3.7) < 0.3;
+  if (dark) { c1 = vec3(0.05, 0.06, 0.08); c2 = bHue(r) * 0.3 + 0.05; }
+  vec3 c = mix(c1, c2, smoothstep(0.0, 1.0, (uv.x + uv.y * 0.6) / (2.4 * h)));
+  float side = fract(r * 11.3) < 0.5 ? 0.55 : 1.45;
+  vec2 hc = vec2(h * side, h * 0.5);
+  float hero = bFill(length(uv - hc) - h * 0.36, aa);
+  vec3 h3 = bHue(r + 0.6);
+  vec3 heroC = fract(r * 17.1) < 0.35 ? vec3(0.85, 0.83, 0.78) : h3 * h3 * 0.8 + 0.12;
+  c = mix(c, heroC, hero);
+  c = mix(c, heroC * 0.55, bFill(length(uv - hc - vec2(h * 0.08, h * 0.1)) - h * 0.1, aa) * hero);
+  float tx = uv.x - (side < 1.0 ? h * 1.05 : h * 0.12) + t * 1.5;
+  float cw = h * 0.13;
+  float ci = floor(tx / cw);
+  float inRow = step(0.0, tx) * step(uv.x, (side < 1.0 ? 1e4 : h * 0.95)) * (t > 0.0 ? 1.0 : step(tx, h * (1.4 + fract(r * 9.1) * 2.0)));
+  float ch = bN2(vec2(ci, r * 91.0));
+  float glyph = step(0.22, fract(tx / cw)) * step(0.18, ch) * inRow;
+  float line1 = step(h * 0.56, uv.y) * step(uv.y, h * 0.78);
+  float line2 = step(h * 0.3, uv.y) * step(uv.y, h * 0.4) * step(0.3, bN2(vec2(floor(tx / (cw * 0.5)), r * 13.0)));
+  vec3 txtC = dark ? bHue(r + 0.1) * 0.6 + 0.4 : (bLum(c1) > 0.5 ? vec3(0.06) : vec3(0.97));
+  c = mix(c, txtC, max(glyph * line1, line2 * inRow * step(0.25, fract(tx / (cw * 0.5)))));
+  c *= 0.9 + 0.1 * smoothstep(0.0, 0.12, min(uv.y, h - uv.y));
+  if (t > 0.0) c *= 0.9 + 0.1 * step(0.5, fract(uv.y * 12.0));
+  return c;
 }
 
 // Output of the procedural surface pass
@@ -339,7 +373,7 @@ void bWindows(inout BOut o, vec2 uv, float bay, float fh, float ww, float wh, fl
   if (det < 0.999) {
     float litAvg = mix(lit, occ * nightOn * (broken || burned || building ? 0.0 : 1.0), smoothstep(3.0, 1.2, pxBay));
     vec3 e = lcol * inten * litAvg * area * 0.55 + vec3(0.08, 0.07, 0.06) * dayL * area * 0.3;
-    if (fire && rInt < 0.8) e += vec3(0.95, 0.3, 0.04) * 1.1 * area * (0.7 + 0.3 * bVN(vec2(uTime * 6.0, rLit * 40.0)));
+    if (fire && rInt < 0.8) e += vec3(0.95, 0.3, 0.04) * 1.1 * area * (0.7 + 0.3 * bVN(vec2(uTime * 6.0, rLit * 40.0))) * (1.0 - 0.6 * uNight);
     float k = (1.0 - det) * min(1.0, area * 1.6);
     o.alb = mix(o.alb, mix(o.alb, glassTint * 1.6, 0.8), k);
     o.rough = mix(o.rough, 0.25, k);
@@ -774,8 +808,8 @@ bO.f0 = 0.04;
     vec3 lcol = bLightCol(rL, sched);
     float dayL = 1.0 - uNight * 0.97;
     vec3 ie = vec3(0.0);
-    if (det > 0.001) ie = bInterior(lp - vec2(0.0, 0.0), bay, 3.4, bRdT, rD, lit, lcol, 2.6, dayL, 2);
-    ie = mix(lcol * 2.2 * lit * 0.5 + vec3(0.05) * dayL, ie, det);
+    if (det > 0.001) ie = bInterior(lp, bay, 3.4, bRdT, rD, lit, lcol, 0.8, dayL, 2);
+    ie = mix(lcol * 0.35 * lit + vec3(0.05) * dayL, ie, det);
     if ((bCond & 8u) != 0u) ie = bFlame(vec2(lp.x / bay, lp.y / 3.4), rL) * 1.2;
     float fres = 0.05 + 0.95 * pow(1.0 - bNdV, 5.0);
     vec3 gAlb = vec3(0.08, 0.1, 0.1);
@@ -794,7 +828,7 @@ bO.f0 = 0.04;
     bO.refl = mG * det * (broken ? 0.0 : 1.0);
     bO.f0 = 0.08;
     bO.emit += ie * (1.0 - fres) * mG * det + ie * (1.0 - det) * 0.6;
-    float signGlow = (0.12 + 2.6 * nightOn) * bLitOn * (broken ? 0.0 : 1.0);
+    float signGlow = (0.12 + 0.8 * nightOn) * bLitOn * (broken ? 0.0 : 1.0);
     bO.emit += (letterCol * letters * 1.3 + signCol * 0.25) * signGlow * mSign * det;
     bO.h += (0.03 * mCorn + 0.015 * mSign + 0.02 * mFr - 0.06 * mG) * det;
   }
@@ -845,8 +879,8 @@ bO.f0 = 0.04;
     bO.rough = mix(bO.rough, 0.3, mWin * det);
     bO.metal = mix(bO.metal, 0.0, mWin * det);
     float lw = mix(mWin - mWinF, 0.12, 1.0 - det);
-    bO.emit += lcol * 1.8 * lit * lw + lcol * 0.02 * bNightOn * lw * bLitOn;
-    if ((bCond & 8u) != 0u) bO.emit += vec3(0.95, 0.3, 0.04) * 1.4 * lw * (0.6 + 0.4 * bVN(vec2(uTime * 7.0, rb * 10.0)));
+    bO.emit += lcol * 0.55 * lit * lw + lcol * 0.01 * bNightOn * lw * bLitOn;
+    if ((bCond & 8u) != 0u) bO.emit += vec3(0.95, 0.3, 0.04) * 1.4 * lw * (0.6 + 0.4 * bVN(vec2(uTime * 7.0, rb * 10.0))) * (1.0 - 0.6 * uNight);
     bO.h += (-0.05 * mDoor + slat * 0.004 * mDoor - 0.03 * mWin) * det;
   }
 #endif
@@ -983,13 +1017,30 @@ bO.alb *= 0.97 + 0.06 * bVN(bUv * 2.0);
 #if BTYPE == 23
 {
   float det = 1.0 - smoothstep(0.01, 0.04, bMpp);
-  float pl = floor(bUv.y / 0.14);
-  float fy = fract(bUv.y / 0.14);
-  vec3 c = bO.alb * (0.86 + 0.2 * bN2(vec2(pl, floor(bUv.x / 2.3 + pl * 0.41))));
-  c *= 0.9 + 0.14 * bVN(vec2(bUv.x * 2.0, pl * 5.0 + fy * 2.0));
-  c *= mix(1.0, 1.0 - 0.3 * smoothstep(0.88, 1.0, fy), det);
-  bO.alb = c;
-  bO.h -= smoothstep(0.88, 1.0, fy) * 0.004 * det;
+  bool bPicket = false;
+#ifdef B_FAC
+  bPicket = uint(vBFac.x * 255.0 + 0.5) == 20u;
+#endif
+  if (bPicket) {
+    // picket fence panel (UV u = metres, v = 0..1): pointed boards with the
+    // shaded lawn showing between them
+    float aaP = bMpp * 0.75 + 1e-4;
+    float fx = fract(bUv.x / 0.16);
+    float board = bFill(abs(fx - 0.5) * 0.16 - 0.045, aaP) * step(bUv.y, 1.0 - abs(fx - 0.5) * 0.5);
+    float m = mix(0.6, board, det);
+    vec3 gap = vec3(0.07, 0.1, 0.05);
+    bO.alb = mix(gap, bO.alb * (0.92 + 0.08 * bN2(vec2(floor(bUv.x / 0.16), 1.0))), m);
+    bO.rough = mix(0.95, 0.8, m);
+    bO.h += 0.01 * board * det;
+  } else {
+    float pl = floor(bUv.y / 0.14);
+    float fy = fract(bUv.y / 0.14);
+    vec3 c = bO.alb * (0.86 + 0.2 * bN2(vec2(pl, floor(bUv.x / 2.3 + pl * 0.41))));
+    c *= 0.9 + 0.14 * bVN(vec2(bUv.x * 2.0, pl * 5.0 + fy * 2.0));
+    c *= mix(1.0, 1.0 - 0.3 * smoothstep(0.88, 1.0, fy), det);
+    bO.alb = c;
+    bO.h -= smoothstep(0.88, 1.0, fy) * 0.004 * det;
+  }
 }
 #endif
 #if BTYPE == 24
@@ -1062,7 +1113,7 @@ bO.alb *= 0.75 + 0.4 * bVN(vec2(atan(bN.z, bN.x) * 4.0, vBWPos.y * 6.0));
   bO.alb = c * 0.6;
   bO.refl = 1.0;
   bO.f0 = 0.02;
-  bO.emit += bO.alb * (0.25 + 0.6 * caus) * bNightOn * bLitOn * 1.2 + c * 0.05 * (1.0 - uNight);
+  bO.emit += bO.alb * (0.25 + 0.6 * caus) * bNightOn * bLitOn * 0.4 + c * 0.05 * (1.0 - uNight);
   bO.h += ca * 0.01;
 }
 #endif
@@ -1098,19 +1149,31 @@ bO.alb *= 0.75 + 0.4 * bVN(vec2(atan(bN.z, bN.x) * 4.0, vBWPos.y * 6.0));
   bO.h += rowM * 0.08 * det;
 }
 #endif
-#if BTYPE == 34
+#if BTYPE == 34 || BTYPE == 35
 {
-  float on = bLitOn;
-  bO.emit += bO.alb * (0.12 + 2.3 * bNightOn) * on;
-}
+  bool bIsAd = false;
+#ifdef B_FAC
+  bIsAd = uint(vBFac.x * 255.0 + 0.5) == 21u;
 #endif
-#if BTYPE == 35
-{
+#ifdef B_FAC
+  if (bIsAd) {
+    // advertising panel / media screen: UV = metres (u along, v up from the
+    // panel's bottom edge, panel height in aFac.z/16). Screens (neon) cycle ads.
+    float ph = max(0.5, vBFac.z * 255.0 / 16.0);
+    float slot = BTYPE == 35 ? floor(uTime / 7.0 + float(bSeed % 13u)) : 0.0;
+    float r = bHashF(bSeed + uint(vBFac.y * 255.0 + 0.5) * 7919u, bFace + 31u, bU(slot));
+    bO.alb = bAdArt(bUv, ph, r, BTYPE == 35 ? uTime : 0.0, bMpp);
+  }
+#endif
+#if BTYPE == 34
+  bO.emit += bO.alb * (bIsAd ? 0.1 + 0.3 * bNightOn : 0.14 + 0.75 * bNightOn) * bLitOn;
+#else
   uint k = bSeed * 16u + bFace;
   float r = bHashF(k, 3u, bU(vBWPos.y * 0.2));
-  float fl = r < 0.08 ? step(0.25, bVN(vec2(uTime * 11.0, r * 40.0))) : 1.0;
-  bO.emit += bO.alb * (0.7 + 3.1 * bNightOn) * fl * bLitOn;
+  float fl = r < 0.08 && !bIsAd ? step(0.25, bVN(vec2(uTime * 11.0, r * 40.0))) : 1.0;
+  bO.emit += bO.alb * (bIsAd ? 0.3 + 0.12 * bNightOn : 0.7 + 0.5 * bNightOn) * fl * bLitOn;
   bO.alb *= 0.55;
+#endif
 }
 #endif
 #if BTYPE == 36
@@ -1178,9 +1241,9 @@ bO.alb *= 0.75 + 0.4 * bVN(vec2(atan(bN.z, bN.x) * 4.0, vBWPos.y * 6.0));
       bO.rough = mix(0.8, 0.12, m);
       bO.refl = m;
       bO.f0 = ft == 3u ? 0.25 : 0.08;
-      float inten = shopRow ? 2.4 : bLitInten(sched);
+      float inten = shopRow ? 0.75 : bLitInten(sched);
       bO.emit += lcol * inten * lit * m * 0.85 + vec3(0.05, 0.045, 0.04) * m * (1.0 - uNight);
-      if ((bCond & 8u) != 0u) bO.emit += vec3(0.95, 0.3, 0.04) * 1.2 * m * (0.7 + 0.3 * bVN(vec2(uTime * 6.0, rl * 40.0)));
+      if ((bCond & 8u) != 0u) bO.emit += vec3(0.95, 0.3, 0.04) * 1.2 * m * (0.7 + 0.3 * bVN(vec2(uTime * 6.0, rl * 40.0))) * (1.0 - 0.6 * uNight);
     }
     if ((bCond & 3u) != 0u) bO.alb *= 0.55;
   }
@@ -1205,7 +1268,7 @@ if ((bCond & 2u) != 0u) {
   bO.metal = 0.0;
   bO.refl *= 0.05;
   if ((bCond & 8u) == 0u) bO.emit *= 0.0;
-  else bO.emit += vec3(1.0, 0.28, 0.05) * 0.8 * smoothstep(0.55, 0.8, s) * (0.6 + 0.4 * bVN(vec2(uTime * 5.0, vBWPos.y)));
+  else bO.emit += vec3(1.0, 0.28, 0.05) * 0.8 * smoothstep(0.55, 0.8, s) * (0.6 + 0.4 * bVN(vec2(uTime * 5.0, vBWPos.y))) * (1.0 - 0.6 * uNight);
 }
 if ((bCond & 4u) != 0u) {
   // flooded: soaked dark band under a ragged waterline, silt stain above,
@@ -1236,7 +1299,7 @@ if ((bCond & 4u) != 0u) {
 if ((bCond & 8u) != 0u) {
   // on fire: flickering orange glow washing over the surfaces
   float fl = 0.55 + 0.45 * bVN(vec2(uTime * 6.0 + vBWPos.x * 0.2, vBWPos.y * 0.4 - uTime * 2.0));
-  bO.emit += vec3(1.0, 0.36, 0.08) * 0.22 * fl * max(0.2, 1.0 - abs(bN.y));
+  bO.emit += vec3(1.0, 0.36, 0.08) * 0.22 * fl * max(0.2, 1.0 - abs(bN.y)) * (1.0 - 0.6 * uNight);
 }
 // ── weather: snow settles on up-facing surfaces, rain darkens and glosses ──
 #if BTYPE != 6 && BTYPE != 21 && BTYPE != 30 && BTYPE != 34 && BTYPE != 35
@@ -1509,6 +1572,12 @@ export function setMaterialWeather(wet: number, snow: number): void {
   U.uSnow.value = snow;
 }
 
+/** 1 / the renderer's current exposure: UI-like overlays (ghosts, highlight,
+ *  problem icons) keep a constant look while the eye adaptation swings ×4 at night. */
+export function setExposureCompensation(k: number): void {
+  G.uExpComp.value = k;
+}
+
 /** Current values of the shared building uniforms (read-only use). */
 export function materialUniforms(): { night: number; hour: number; time: number } {
   return { night: U.uNight.value, hour: U.uHour.value, time: U.uTime.value };
@@ -1519,7 +1588,7 @@ export function materialUniforms(): { night: number; hour: number; time: number 
 // tint: the tint is the material's `emissive` colour, so placement tools that
 // recolour previews through `emissive` (valid ↔ invalid) keep working, and
 // clones (tools tint per-preview copies) keep the effect via the constructor.
-const G = { uPulse: { value: 0.5 }, uGTime: { value: 0 } };
+const G = { uPulse: { value: 0.5 }, uGTime: { value: 0 }, uExpComp: { value: 1 } };
 
 class GhostMaterial extends THREE.MeshStandardMaterial {
   constructor(params?: THREE.MeshStandardMaterialParameters) {
@@ -1527,11 +1596,12 @@ class GhostMaterial extends THREE.MeshStandardMaterial {
     this.onBeforeCompile = (shader) => {
       shader.uniforms.uPulse = G.uPulse;
       shader.uniforms.uGTime = G.uGTime;
+      shader.uniforms.uExpComp = G.uExpComp;
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\nvarying float vGY;')
         .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGY = (modelMatrix * vec4(transformed, 1.0)).y;');
       shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', '#include <common>\nuniform float uPulse;\nuniform float uGTime;\nvarying float vGY;')
+        .replace('#include <common>', '#include <common>\nuniform float uPulse;\nuniform float uGTime;\nuniform float uExpComp;\nvarying float vGY;')
         .replace(
           '#include <opaque_fragment>',
           `#include <opaque_fragment>
@@ -1543,7 +1613,7 @@ class GhostMaterial extends THREE.MeshStandardMaterial {
   vec3 gL = normalize((viewMatrix * vec4(0.4, 0.8, 0.3, 0.0)).xyz);
   float gLamb = 0.55 + 0.45 * max(dot(gN, gL), 0.0);
   float gScan = smoothstep(0.85, 1.0, fract(vGY * 0.25 - uGTime * 0.6)) * 0.35;
-  gl_FragColor = vec4(gTint * gLamb + gTint * gRim * 1.2 + gScan * gTint, opacity * (0.75 + 0.25 * uPulse) + gRim * 0.25);
+  gl_FragColor = vec4((gTint * gLamb + gTint * gRim * 1.2 + gScan * gTint) * uExpComp, opacity * (0.75 + 0.25 * uPulse) + gRim * 0.25);
 }`,
         );
     };
@@ -1580,7 +1650,7 @@ export function ghostMaterial(valid: boolean): THREE.Material {
 let ghostDepth: THREE.MeshBasicMaterial | null = null;
 export function ghostDepthMaterial(): THREE.Material {
   if (!ghostDepth) {
-    ghostDepth = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: true });
+    ghostDepth = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: true, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
     ghostDepth.name = 'bld:ghost-depth';
   }
   return ghostDepth;

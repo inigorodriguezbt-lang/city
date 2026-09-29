@@ -7,7 +7,7 @@ import type { MatKey } from '../types';
 import { LodFacade, WF, WinKind, facCode } from './constants';
 import { BLANK, type Fab, roundRect } from './fab';
 import { block, piers, plinth } from './blocks';
-import { GROUND, awning, balconies, billboard, car, door, flatRoof, greenRoof, lampPost, lotGround, pad, parking, roofClutter, sign, tree, vaultRoof, withFace } from './parts';
+import { GROUND, adPanel, awning, balconies, billboard, car, dome, door, flatRoof, greenRoof, lampPost, lotGround, pad, parking, roofClutter, sign, tree, vaultRoof, withFace } from './parts';
 import { artDecoCrown, gardenTrees, lawnColor, treeKindFor } from './residential';
 import { type StyleKit, aptWindows, lightTrim, pickRoof, pickWall, pitchedMat, roofColor, styleKit, towerWindows, wallColor } from './style';
 import { P, type Col, clamp, col, hueCol, shade } from './util';
@@ -227,8 +227,9 @@ function departmentStore(f: Fab, k: StyleKit, floors: number): void {
   const fh = 4.2;
   const code = mat === 'wall_glass' ? towerWindows(k, mat, rng, true) : facCode(WinKind.Single, rng.range(2.0, 2.6), 2.4, WF.DarkFrame | (k.ornate > 0.5 ? WF.Surround : 0));
   plinth(f, 0, bz, bw, bd, 0.5, shade(wc, 0.6), 'wall_stone');
+  const roofShape = k.id === 'artdeco' || (k.id === 'european' && rng.chance(0.4)) ? 'mansard' : 'flat';
   const out = block(f, {
-    cx: 0, cz: bz, w: bw, d: bd, floors, fh, mat, color: wc, code, roof: k.id === 'artdeco' || (k.id === 'european' && rng.chance(0.4)) ? 'mansard' : 'flat', roofMat: 'roof_metal', roofColor: roofColor(k, 'roof_metal', rng),
+    cx: 0, cz: bz, w: bw, d: bd, floors, fh, mat, color: wc, code, roof: roofShape, roofMat: 'roof_metal', roofColor: roofColor(k, 'roof_metal', rng),
     ground: { mat: 'wall_shop', color: shade(wc, 0.95), code: 0, h: 5.5 }, cornice: lt, richCornice: k.ornate >= 0.5, band: lt, parapet: 1.2, trim: lt, dormerFlags: WF.Surround, flatColor: '#7d7a74',
   });
   withFace(f, 'S', 0, bz, bw, bd, (len) => {
@@ -242,10 +243,57 @@ function departmentStore(f: Fab, k: StyleKit, floors: number): void {
     // big vertical sign on the corner
     sign(f, len / 2 - 1, 8, 0, 1.2, Math.min(out.eave - 10, 14), brand(rng), 'blade');
   });
+  storeSignature(f, k, bw, bd, bz, out.eave, roofShape === 'flat', lt);
   if (k.id !== 'artdeco' && rng.chance(0.6)) billboard(f, 0, out.eave, bz - bd * 0.1, Math.min(18, bw * 0.5), 5, 0, rng.next());
   else roofClutter(f, 0, bz, bw, bd, out.eave, { hvac: 3, bulkhead: { mat, color: wc } });
   const nT = Math.floor(W / 10);
   for (let i = 0; i < nT; i++) tree(f, -W / 2 + (i + 0.5) * (W / nT), D / 2 - 0.6, 6.5, treeKindFor(ctx.theme, rng));
+}
+
+/** Style signatures of big stores: corner domes (european / mediterranean /
+ *  art deco grands magasins), stacked neon signage (asian), LED media screens
+ *  (futuristic / modern), giant wall ads (american). */
+function storeSignature(f: Fab, k: StyleKit, bw: number, bd: number, bz: number, eave: number, flat: boolean, lt: Col): void {
+  const { rng } = f;
+  const upper = eave - 6;
+  if ((k.id === 'european' || k.id === 'mediterranean' || k.id === 'artdeco') && flat && bw >= 24 && rng.chance(0.75)) {
+    // corner rotunda: drum + dome over the street corner
+    const r = clamp(Math.min(bw, bd) * 0.16, 3.5, 6.5);
+    const cx = bw / 2 - r - 0.6, cz = bz + bd / 2 - r - 0.6;
+    const B = f.m();
+    B.cylinder('wall_stone', cx, eave, cz, r * 0.92, r * 0.92, 3.2, shade(lt, 0.95), 14);
+    dome(f, cx, eave + 3.2, cz, r * 0.95, 'roof_metal', k.id === 'mediterranean' ? col(P.terracotta) : col(P.copper), lt, P.gold);
+    return;
+  }
+  if (k.id === 'asian') {
+    // dense stacked signage: horizontal neon panels per floor + tall blades
+    withFace(f, 'S', 0, bz, bw, bd, (len) => {
+      const rows = Math.max(1, Math.floor(upper / 4.2));
+      for (let i = 0; i < rows; i++) {
+        const y = 6 + i * 4.2;
+        const n = rng.int(1, 3);
+        for (let j = 0; j < n; j++) {
+          const w = rng.range(3, Math.min(9, len / n - 1));
+          const x = -len / 2 + (j + 0.5) * (len / n) + rng.range(-1, 1);
+          if (rng.chance(0.55)) adPanel(f, x, y, 0.2, w, 2.2, rng.chance(0.4) ? 'neon' : 'emissive');
+          else sign(f, x, y + 0.4, 0.1, w, 1.4, hueCol(rng.next(), 0.85, 0.55), 'neon');
+        }
+      }
+      for (const x of [-len / 2 + 1.2, len / 2 - 1.2]) sign(f, x, 6, 0, 1.4, Math.max(4, upper - 2), hueCol(rng.next(), 0.9, 0.5), 'blade');
+    });
+    return;
+  }
+  if (k.id === 'futuristic' || (k.id === 'modern' && rng.chance(0.5))) {
+    // LED media facade wrapping the street corner
+    const h = clamp(upper - 2, 5, 15.5);
+    withFace(f, 'S', 0, bz, bw, bd, (len) => adPanel(f, len / 2 - Math.min(14, len * 0.4) / 2 - 0.8, 7, 0.35, Math.min(14, len * 0.4), h, 'neon', rng.next()));
+    withFace(f, 'E', 0, bz, bw, bd, (len) => adPanel(f, -len / 2 + Math.min(10, len * 0.35) / 2 + 0.8, 7, 0.35, Math.min(10, len * 0.35), h, 'neon', rng.next()));
+    return;
+  }
+  if (k.id === 'american' && rng.chance(0.7)) {
+    // painted / printed wall ad on the side wall
+    withFace(f, rng.chance(0.5) ? 'E' : 'W', 0, bz, bw, bd, (len) => adPanel(f, 0, 7, 0.06, Math.min(len * 0.7, 20), clamp(upper - 2, 4, 10), 'emissive'));
+  }
 }
 
 /** Shopping mall: long low block with a glazed barrel-vault atrium and parking. */
@@ -272,6 +320,9 @@ function mall(f: Fab, k: StyleKit): void {
     f.fbox('wall_glass', towerWindows(k, 'wall_glass', rng, true), 0, 0, 2, 14, 4, 8, '#a9c6d4', { fh: 4, top: 'roof_metal', topColor: '#d8dadc', noMass: true, sides: { n: false } });
     sign(f, 0, 8.2, 4, 10, 1.6, brand(rng), 'neon');
     for (const x of [-len * 0.3, len * 0.3]) sign(f, x, 6.2, 0, 6, 1.4, brand(rng), 'box');
+    // anchor-store ad banners on the upper facade
+    const screen = k.id === 'futuristic' || k.id === 'asian';
+    for (const x of [-len * 0.3, len * 0.3]) adPanel(f, x, 8.2, 0.08, Math.min(12, len * 0.18), Math.min(h - 9, 5.5), screen ? 'neon' : 'emissive');
   });
   if (rng.chance(0.6)) billboard(f, bw * 0.3, h, bz + bd * 0.25, 14, 4.5, 0, rng.next());
   roofClutter(f, 0, bz, bw, bd, h, { hvac: 5 });
@@ -317,7 +368,7 @@ function hotelTower(f: Fab, k: StyleKit): void {
     const letters = 5;
     const c = hueCol(rng.pick([0.0, 0.08, 0.55, 0.12]), 0.85, 0.55);
     for (let i = 0; i < letters; i++) B.box('neon', -sw / 2 + (i + 0.5) * (sw / letters), top + 1.6, tz + td / 2 - 0.8, sw / letters * 0.7, 2.6, 0.25, c);
-    f.light(0, top + 2.8, tz + td / 2, c.getHex(), sw * 0.5, 'neon');
+    f.light(0, top + 2.8, tz + td / 2, c.getHex(), Math.min(6, sw * 0.4), 'neon');
     roofClutter(f, 0, tz - 2, tw, td - 4, top, { hvac: 2, antenna: 8, beacon: true });
   }
   if (floors >= 18) f.light(tw / 2 - 0.5, top + 1.3, tz - td / 2 + 0.5, 0xff2a1a, 2.2, 'beacon', true);

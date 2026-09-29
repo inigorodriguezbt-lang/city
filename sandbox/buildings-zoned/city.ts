@@ -3,6 +3,9 @@
 // URL params: hour=15  n=900 (buildings)  size=128  cam=near|mid|far|street|x,y,z,tx,ty,tz
 //   style=mixed|<id>  states=1 (sprinkle construction/abandoned/fire/…)  problems=1
 //   hl=<building index>  preview=zoned:res_high|<service def>  detail=high|medium|low  frames=40
+//   layout=states (one lot per visual state)  layout=services&from=0&count=24 (catalog
+//   service models via the registry + the civic fallback)  sweep=N (orbit the camera
+//   N frames after warm-up and report the steady-state streaming cost)
 import * as THREE from 'three';
 import { EventBus } from '../../src/core/EventBus';
 import type { GameEvents } from '../../src/core/events';
@@ -225,17 +228,30 @@ function info(): string {
   return `buildings ${s.buildings} · detail ${s.detailChunks} · lod ${s.lodChunks} · pending ${s.pending} · verts ${(s.cachedVerts / 1e6).toFixed(2)}M · update max ${upd.toFixed(1)} avg ${(sum / Math.max(1, f)).toFixed(1)} ms · calls ${renderer.info.render.calls} · tris ${(renderer.info.render.triangles / 1000).toFixed(0)}k · emitters ${emitters.size} · f${f}\n` +
     Object.entries(prof).map(([k, v]) => `${k} ${v.toFixed(1)}`).join(' · ') + '\nslow: ' + slow.map(([d, k]) => `${d.toFixed(0)}ms ${k}`).join(' | ');
 }
+// sweep=N: after the warm-up frames, orbit the camera for N frames (streaming
+// cost in steady state: detail chunks entering/leaving, LOD groups, emitters)
+const sweepN = Number(q.get('sweep') ?? 0);
+let sw = 0, swMax = 0, swSum = 0;
+const orbit = new THREE.Vector3(v[3], 0, v[5]);
+const orbitR = Math.hypot(v[0] - v[3], v[2] - v[5]);
 function step(): void {
   game.time = (performance.now() - t0) / 1000;
+  if (f >= updates && sw < sweepN) {
+    const a = (sw / sweepN) * Math.PI * 2;
+    camera.position.set(orbit.x + Math.sin(a) * orbitR * 1.6, v[1], orbit.z + Math.cos(a) * orbitR * 1.6);
+    camera.lookAt(orbit.x + Math.sin(a) * orbitR * 0.6, 0, orbit.z + Math.cos(a) * orbitR * 0.6);
+    camera.updateMatrixWorld();
+  }
   const u0 = performance.now();
   br.update(1 / 60);
   const d = performance.now() - u0;
-  if (f > 2) { upd = Math.max(upd, d); sum += d; }
+  if (f >= updates) { sw++; swMax = Math.max(swMax, d); swSum += d; }
+  else if (f > 2) { upd = Math.max(upd, d); sum += d; }
   f++;
-  if (f < updates) setTimeout(step, 0);
+  if (f < updates + sweepN) setTimeout(step, 0);
   else {
     renderer.render(scene, camera);
-    hud.textContent = info();
+    hud.textContent = info() + (sweepN ? `\nsweep ${sw} frames: max ${swMax.toFixed(1)} avg ${(swSum / Math.max(1, sw)).toFixed(2)} ms` : '');
     (window as unknown as { __done: boolean }).__done = true;
   }
 }

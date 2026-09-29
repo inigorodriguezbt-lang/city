@@ -156,12 +156,13 @@ export function fence(f: Fab, pts: P2[], kind: FenceKind, color: ColorLike, h = 
       const hh = kind === 'chain' ? h * 1.8 : h;
       M.box(mat, 0, GROUND + hh * 0.72, 0, len, 0.07, 0.06, color);
       M.box(mat, 0, GROUND + hh * 0.25, 0, len, 0.07, 0.06, color);
-      const n = Math.max(1, Math.round(len / (kind === 'picket' ? 0.16 : kind === 'iron' ? 0.14 : 2.5)));
-      if (f.detail !== 'low' && kind !== 'chain') {
-        for (let k = 0; k <= n; k += kind === 'picket' ? 1 : 1) {
-          const x = -len / 2 + (k / n) * len;
-          M.box(mat, x, GROUND, 0, kind === 'picket' ? 0.09 : 0.03, hh, 0.03, color, { top: false, sides: { n: false } });
-        }
+      if (kind !== 'chain') {
+        // pickets / balusters are painted by the wood / metal railing shaders
+        // (a double-sided panel instead of hundreds of tiny boxes)
+        const R = f.m(RAIL_CODE);
+        const panelCol = kind === 'iron' ? shade(cl(0x5d6b4a), 0.5) : color;
+        R.quad(mat, { x: -len / 2, y: GROUND, z: 0 }, { x: len / 2, y: GROUND, z: 0 }, { x: len / 2, y: GROUND + hh, z: 0 }, { x: -len / 2, y: GROUND + hh, z: 0 }, [[0, 0], [len, 0], [len, 1], [0, 1]], panelCol, { x: 0, y: 0, z: 1 });
+        R.quad(mat, { x: len / 2, y: GROUND, z: 0 }, { x: -len / 2, y: GROUND, z: 0 }, { x: -len / 2, y: GROUND + hh, z: 0 }, { x: len / 2, y: GROUND + hh, z: 0 }, [[len, 0], [0, 0], [0, 1], [len, 1]], panelCol, { x: 0, y: 0, z: -1 });
       } else {
         M.quad(mat, { x: -len / 2, y: GROUND, z: 0 }, { x: len / 2, y: GROUND, z: 0 }, { x: len / 2, y: GROUND + hh, z: 0 }, { x: -len / 2, y: GROUND + hh, z: 0 }, [[0, 0], [len, 0], [len, hh], [0, hh]], shade(cl(color), 0.8), { x: 0, y: 0, z: 1 });
         M.quad(mat, { x: len / 2, y: GROUND, z: 0 }, { x: -len / 2, y: GROUND, z: 0 }, { x: -len / 2, y: GROUND + hh, z: 0 }, { x: len / 2, y: GROUND + hh, z: 0 }, [[0, 0], [len, 0], [len, hh], [0, hh]], shade(cl(color), 0.8), { x: 0, y: 0, z: -1 });
@@ -286,7 +287,7 @@ export function gableRoof(f: Fab, r: RoofSpec): void {
     W.tri(wm, { x, y: r.y, z: r.cz + hd }, { x, y: yr, z: r.cz }, { x, y: r.y, z: r.cz - hd }, [0, r.y * vs], [hd, yr * vs], [r.d, r.y * vs], wc, { x: s, y: 0, z: 0 });
     if (r.attic && r.rise > 2.3 && f.detail !== 'low') atticWindow(f, wm, r.attic, x + s * 0.02, r.cz, s, r.y + Math.min(1.9, r.rise * 0.42), wc);
   }
-  f.mass(r.cx, r.cz, r.w, r.d, r.y, r.rise * 0.5, r.color, r.color, LodFacade.None);
+  f.mass(r.cx, r.cz, r.w + og * 2, r.d, r.y, r.rise, r.wallColor ?? r.color, r.color, LodFacade.None, 1);
   f.reach(yr);
 }
 
@@ -348,7 +349,13 @@ export function hipRoof(f: Fab, r: RoofSpec): void {
     fascia(B, x1, z0, x0, z0, ye + 0.02, 0.18, trim, { x: 0, y: 0, z: -1 });
     fascia(B, x0, z0, x0, z1, ye + 0.02, 0.18, trim, { x: -1, y: 0, z: 0 });
   }
-  f.mass(r.cx, r.cz, r.w, r.d, r.y, r.rise * 0.45, r.color, r.color, LodFacade.None);
+  // LOD: hip prism with the ridge along the longer side
+  if (W >= D) f.mass(r.cx, r.cz, W, D, ye, yr - ye, r.color, r.color, LodFacade.None, 2);
+  else {
+    f.pushTRS(r.cx, 0, r.cz, Math.PI / 2);
+    f.mass(0, 0, D, W, ye, yr - ye, r.color, r.color, LodFacade.None, 2);
+    f.pop();
+  }
   f.reach(yr);
 }
 
@@ -687,14 +694,14 @@ export function sign(f: Fab, x: number, y: number, z: number, w: number, h: numb
   if (kind === 'blade') {
     B.box('metal', x, y + h, z + 0.35, 0.08, 0.08, 0.7, P.gunmetal);
     B.box('neon', x, y, z + 0.75, 0.2, h, Math.max(0.6, w), c, { bottom: true });
-    if (light) f.light(x, y + h / 2, z + 0.75, c.getHex(), Math.max(1.5, h * 0.9), 'neon');
+    if (light) for (const t of h > 5 ? [0.3, 0.7] : [0.5]) f.light(x, y + h * t, z + 0.75, c.getHex(), Math.min(3.2, 1.2 + h * 0.2), 'neon');
   } else if (kind === 'neon') {
     B.box('plain', x, y, z + 0.05, w + 0.2, h + 0.2, 0.1, '#1e2024', { sides: { n: false } });
     B.box('neon', x, y + h * 0.2, z + 0.12, w * 0.9, h * 0.6, 0.06, c, { sides: { n: false } });
-    if (light) f.light(x, y + h / 2, z + 0.4, c.getHex(), Math.max(1.6, w * 0.6), 'neon');
+    if (light) f.light(x, y + h / 2, z + 0.4, c.getHex(), Math.min(3.5, Math.max(1.4, w * 0.35)), 'neon');
   } else {
     B.box('emissive', x, y, z + 0.06, w, h, 0.12, c, { sides: { n: false } });
-    if (light) f.light(x, y + h / 2, z + 0.5, c.getHex(), Math.max(1.4, w * 0.45), 'lamp');
+    if (light) f.light(x, y + h / 2, z + 0.5, c.getHex(), Math.min(3, Math.max(1.2, w * 0.3)), 'lamp');
   }
 }
 
@@ -705,9 +712,28 @@ export function billboard(f: Fab, x: number, y: number, z: number, w: number, h:
   for (const px of [-w * 0.35, w * 0.35]) B.box('metal', px, 0, 0, 0.2, h * 0.6 + 1.2, 0.2, P.steelDark);
   B.box('metal', 0, 1.2, -0.15, w, 0.15, 0.6, P.steelDark);
   B.box('plain', 0, 1.2 + h * 0.08, -0.05, w + 0.2, h + 0.2, 0.18, '#2a2c30');
-  B.box('emissive', 0, 1.3 + h * 0.08, 0.05, w, h, 0.02, hueCol(hue, 0.55, 0.55), { sides: { n: false } });
-  f.light(0, 1.3 + h * 0.6, 0.8, 0xfff0d8, w * 0.35, 'flood');
+  adPanel(f, 0, 1.3 + h * 0.08, 0.045, w, h, 'emissive', hue);
+  // gooseneck floodlights along the top edge
+  const nL = Math.max(2, Math.round(w / 6));
+  for (let i = 0; i < nL; i++) {
+    const lx = -w / 2 + (i + 0.5) * (w / nL);
+    B.box('metal', lx, 1.3 + h * 1.08, 0.05, 0.08, 0.08, 0.9, P.gunmetal);
+    B.box('emissive', lx, 1.3 + h * 1.08 - 0.12, 0.9, 0.35, 0.14, 0.22, 0xfff4e0);
+    f.light(lx, 1.3 + h * 1.08 - 0.2, 1.0, 0xfff0d8, 0.9, 'lamp');
+  }
   f.pop();
+}
+
+/** Advert panel / media screen facing +Z in the plane z (centre x, bottom y):
+ *  the emissive / neon shaders paint procedural ad art on it (seeded per model;
+ *  `hue` only tints the frame). Neon panels act as animated LED screens. */
+export function adPanel(f: Fab, x: number, y: number, z: number, w: number, h: number, mat: 'emissive' | 'neon' = 'emissive', hue = 0): void {
+  const hh = Math.min(15.9, h);
+  // byte 1 = design variant so neighbouring panels show different ads
+  const B = f.m(facCode(WinKind.Ad, f.rng.int(1, 255) / 64, hh / 4));
+  const x0 = x - w / 2, x1 = x + w / 2;
+  B.quad(mat, { x: x0, y, z }, { x: x1, y, z }, { x: x1, y: y + hh, z }, { x: x0, y: y + hh, z }, [[0, 0], [w, 0], [w, hh], [0, hh]], 0xffffff, { x: 0, y: 0, z: 1 });
+  if (mat === 'neon') f.m().box('plain', x, y - 0.25, z - 0.12, w + 0.5, hh + 0.5, 0.1, hueCol(hue, 0.2, 0.12), { sides: { n: false } });
 }
 
 // ── rooftop plant ────────────────────────────────────────────────────────

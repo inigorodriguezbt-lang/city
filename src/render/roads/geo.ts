@@ -14,11 +14,16 @@ import { DECK_THICKNESS, type RoadHeightField } from './surface';
 
 export const code = (kind: Kind, style: number, flags: number): number => kind + style * 16 + flags * 256;
 
+/** fixed-point scale of the packed (s, t, hw) road coordinates (1/1024 m, range ±32 m) */
+export const ROAD_SCALE = 1024;
+const EMPTY = new Float32Array(0);
+
 export class GeoBuf {
   pos = new Float32Array(3 * 16384);
   /** quantized unit normals (written once in vtx: no conversion pass) */
   nor = new Int8Array(3 * 16384);
-  road = new Float32Array(4 * 16384);
+  /** aRoad (s, t, hw) × ROAD_SCALE and the material code, packed as int16 (8 bytes / vertex) */
+  road = new Int16Array(4 * 16384);
   idx = new Uint32Array(3 * 16384);
   nv = 0;
   ni = 0;
@@ -34,7 +39,7 @@ export class GeoBuf {
 
   private growV(): void {
     const n = this.pos.length * 2;
-    const p = new Float32Array(n), q = new Int8Array(n), r = new Float32Array((n / 3) * 4);
+    const p = new Float32Array(n), q = new Int8Array(n), r = new Int16Array((n / 3) * 4);
     p.set(this.pos);
     q.set(this.nor);
     r.set(this.road);
@@ -60,9 +65,10 @@ export class GeoBuf {
     N[o + 2] = ((qz + 128.5) | 0) - 128;
     const r = i * 4;
     const R = this.road;
-    R[r] = s;
-    R[r + 1] = t;
-    R[r + 2] = hw;
+    // int16 stores truncate; |s|, t, hw stay well inside ±32 m (one cell plus parapets)
+    R[r] = s * ROAD_SCALE;
+    R[r + 1] = t * ROAD_SCALE;
+    R[r + 2] = hw * ROAD_SCALE;
     R[r + 3] = c;
     const mn = this.bmin, mx = this.bmax;
     if (x < mn[0]) mn[0] = x;
@@ -114,11 +120,18 @@ export class GeoBuf {
     if (!this.ni) return null;
     const g = new THREE.BufferGeometry();
     const nv = this.nv;
-    g.setAttribute('position', new THREE.BufferAttribute(this.pos.slice(0, nv * 3), 3));
-    g.setAttribute('normal', new THREE.BufferAttribute(this.nor.slice(0, nv * 3), 3, true));
-    g.setAttribute('aRoad', new THREE.BufferAttribute(this.road.slice(0, nv * 4), 4));
+    // CPU copies are dropped once uploaded (bounds are precomputed below; nothing reads them back)
+    const release = function (this: THREE.BufferAttribute): void {
+      (this as unknown as { array: ArrayLike<number> }).array = EMPTY;
+    };
+    const pos = new THREE.BufferAttribute(this.pos.slice(0, nv * 3), 3).onUpload(release);
+    const nor = new THREE.BufferAttribute(this.nor.slice(0, nv * 3), 3, true).onUpload(release);
+    const road = new THREE.BufferAttribute(this.road.slice(0, nv * 4), 4, false).onUpload(release);
+    g.setAttribute('position', pos);
+    g.setAttribute('normal', nor);
+    g.setAttribute('aRoad', road);
     const idx = nv < 65535 ? new Uint16Array(this.idx.subarray(0, this.ni)) : this.idx.slice(0, this.ni);
-    g.setIndex(new THREE.BufferAttribute(idx, 1));
+    g.setIndex(new THREE.BufferAttribute(idx, 1).onUpload(release));
     // bounds tracked while emitting (no extra pass over the vertices)
     const mn = this.bmin, mx = this.bmax;
     g.boundingBox = new THREE.Box3(new THREE.Vector3(mn[0], mn[1], mn[2]), new THREE.Vector3(mx[0], mx[1], mx[2]));
@@ -197,6 +210,20 @@ export class Frame {
     }
     this.X = this.ox + x;
     this.Z = this.oz + z;
+  }
+
+  /** outputs of `d()` */
+  DX = 0;
+  DZ = 0;
+
+  /** canonical direction → world direction stored in this.DX / this.DZ (allocation-free) */
+  d(du: number, dv: number): void {
+    switch (this.k) {
+      case 0: this.DX = du; this.DZ = dv; break;
+      case 1: this.DX = -dv; this.DZ = du; break;
+      case 2: this.DX = -du; this.DZ = -dv; break;
+      default: this.DX = dv; this.DZ = -du; break;
+    }
   }
 
   /** canonical direction → world direction (x, z) */
@@ -283,6 +310,8 @@ export interface RowOpts {
   skirtR: boolean;
   /** deck underside (bridges) */
   bottom: boolean;
+  /** vertical faces between layers of different lift (curbs, medians); far LOD skips them on land */
+  walls?: boolean;
   skirtKind: Kind;
 }
 
@@ -409,7 +438,7 @@ export function emitRows(buf: GeoBuf, fr: Frame, sec: Section, rows: Row[], map:
   }
 
   // ── walls between layers of different lift ──
-  for (let i = 1; i < L; i++) {
+  for (let i = 1; i < L && opts.walls !== false; i++) {
     let any = false;
     for (let j = 0; j < R; j++) if (Math.abs(rows[j].lb[i - 1] - rows[j].la[i]) > 0.004) any = true;
     if (!any) continue;

@@ -248,7 +248,8 @@ export class TerrainData {
             if (w.road[ci] || w.bldg[ci] || w.zone[ci]) wgt = 0;
           }
         }
-        let h = H[vi];
+        const h0 = H[vi];
+        let h = h0;
         if (wgt > 0) {
           let sum = 0, ws = 0;
           for (let oy = -2; oy <= 2; oy++) {
@@ -263,6 +264,27 @@ export class TerrainData {
             }
           }
           h += (sum / ws - h) * wgt;
+          // Keep the water where it belongs. A vertex touching a single wet
+          // cell is the outer corner of a cell-staircase bank: it may rise out
+          // of the water (that is what turns the staircase into a smooth
+          // diagonal). Vertices touching 2+ wet cells lie on the channel
+          // itself and stay submerged, so even 1-cell streams keep flowing;
+          // dry vertices are never pushed below the nearby water level.
+          let wetLevel = Infinity, nearLevel = -Infinity, wetN = 0;
+          for (let q = 0; q < 4; q++) {
+            const cx = vx - 1 + (q & 1), cy = vy - 1 + (q >> 1);
+            if (cx < 0 || cy < 0 || cx >= s || cy >= s) continue;
+            const ci = cy * s + cx;
+            if (this.cellDist[ci] === 0) {
+              wetLevel = Math.min(wetLevel, w.waterLevel(cx, cy));
+              wetN++;
+            } else if (this.cellLevel[ci] > nearLevel) nearLevel = this.cellLevel[ci];
+          }
+          if (wetN >= 2) {
+            if (h0 < wetLevel) h = Math.min(h, wetLevel - 0.3);
+          } else if (wetN === 0 && nearLevel > -500) {
+            h = Math.max(h, Math.min(h0, nearLevel + 0.2));
+          }
         }
         if (V[vi] !== h) {
           V[vi] = h;

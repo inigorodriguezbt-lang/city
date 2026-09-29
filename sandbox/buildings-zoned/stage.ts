@@ -17,7 +17,7 @@ export function makeStage(canvas: HTMLCanvasElement, hour: number, groundColor: 
   renderer.setPixelRatio(1);
   renderer.setSize(innerWidth, innerHeight, false);
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.0;
+  renderer.toneMappingExposure = 1.0; // adapted below once the hour is known
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap;
   const scene = new THREE.Scene();
@@ -27,6 +27,7 @@ export function makeStage(canvas: HTMLCanvasElement, hour: number, groundColor: 
   const sunDir = new THREE.Vector3(Math.cos(sunAng) * 0.8, Math.sin(sunAng), 0.45).normalize();
   const day = THREE.MathUtils.clamp(Math.sin(sunAng) * 1.6 + 0.15, 0, 1);
   const night = 1 - THREE.MathUtils.smoothstep(Math.sin(sunAng), -0.12, 0.18);
+  renderer.toneMappingExposure = 1 + 3 * night; // SkySystem eye adaptation (≈×4 at night)
   const dusk = Math.max(0, 1 - Math.abs(Math.sin(sunAng) - 0.1) * 4) * (1 - night * 0.6);
   const skyTop = new THREE.Color().setRGB(0.012 + 0.3 * day, 0.018 + 0.45 * day, 0.045 + 0.75 * day);
   const skyHor = new THREE.Color().setRGB(0.03 + 0.7 * day + 0.5 * dusk, 0.035 + 0.72 * day + 0.2 * dusk, 0.06 + 0.78 * day);
@@ -43,7 +44,7 @@ export function makeStage(canvas: HTMLCanvasElement, hour: number, groundColor: 
     envScene.add(new THREE.Mesh(new THREE.SphereGeometry(100, 32, 16), skyMat));
     const pm = new THREE.PMREMGenerator(renderer);
     scene.environment = pm.fromScene(envScene, 0.02).texture;
-    scene.environmentIntensity = 0.85;
+    scene.environmentIntensity = 0.85 * (1 - 0.8 * night);
   }
   const sun = new THREE.DirectionalLight(new THREE.Color(1, 0.93 - dusk * 0.25, 0.84 - dusk * 0.4), 3.2 * day + 0.03);
   sun.castShadow = true;
@@ -51,10 +52,10 @@ export function makeStage(canvas: HTMLCanvasElement, hour: number, groundColor: 
   sun.shadow.bias = -0.0004;
   sun.shadow.normalBias = 0.6;
   scene.add(sun, sun.target);
-  const hemi = new THREE.HemisphereLight(skyTop.clone().lerp(new THREE.Color(0.6, 0.7, 0.9), 0.5), new THREE.Color(0.25, 0.23, 0.2), 0.2 + 1.25 * day);
+  const hemi = new THREE.HemisphereLight(skyTop.clone().lerp(new THREE.Color(0.6, 0.7, 0.9), 0.5), new THREE.Color(0.25, 0.23, 0.2), 0.08 + 1.2 * day);
   scene.add(hemi);
   if (night > 0.5) {
-    const moon = new THREE.DirectionalLight(0x8fa6d8, 0.22);
+    const moon = new THREE.DirectionalLight(0x8fa6d8, 0.1);
     moon.position.set(-300, 500, 200);
     scene.add(moon);
   }

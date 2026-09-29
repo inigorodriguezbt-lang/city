@@ -43,7 +43,7 @@ const fs = require('fs');
     const info = await page.evaluate(() => {
       window.__pause = true;
       const r = window.__r;
-      return `calls ${r.stats.drawCalls} tris ${(r.stats.triangles / 1000) | 0}k trees ${r.trees ? r.trees.instanceCount : 0} leaves ${r.terrain ? r.terrain.leafCount : 0}`;
+      return `upd ${(window.__upd ?? 0).toFixed(2)}ms calls ${r.stats.drawCalls} tris ${(r.stats.triangles / 1000) | 0}k trees ${r.trees ? r.trees.instanceCount : 0} leaves ${r.terrain ? r.terrain.leafCount : 0}`;
     });
     const out = `${prefix}-${v.name}.png`;
     await page.waitForTimeout(300);

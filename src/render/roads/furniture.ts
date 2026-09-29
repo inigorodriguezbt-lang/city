@@ -20,6 +20,7 @@ export const enum FT {
   Bollard,
   Trunk,
   Canopy,
+  Sleeper,
   COUNT,
 }
 
@@ -102,6 +103,41 @@ export class FurnitureBuilder {
     a[o + 8] = s * sz;
     a[o + 9] = 0;
     a[o + 10] = c * sz;
+    a[o + 11] = 0;
+    a[o + 12] = x;
+    a[o + 13] = y;
+    a[o + 14] = z;
+    a[o + 15] = 1;
+  }
+
+  /**
+   * Instance whose model +Y follows the surface normal (nx, ny, nz) and whose
+   * +X points along the horizontal direction (dx, dz) projected onto the surface.
+   */
+  addOriented(t: FT, x: number, y: number, z: number, dx: number, dz: number, nx: number, ny: number, nz: number): void {
+    if (!this.detail) return;
+    // X' = d − n (d·n), normalized; Z' = X' × Y'
+    const dn = dx * nx + dz * nz;
+    let ax = dx - nx * dn, ay = -ny * dn, az = dz - nz * dn;
+    const al = Math.hypot(ax, ay, az) || 1;
+    ax /= al;
+    ay /= al;
+    az /= al;
+    const zx = ay * nz - az * ny, zy = az * nx - ax * nz, zz = ax * ny - ay * nx;
+    const m = this.mats[t];
+    const o = m.reserve(16);
+    const a = m.a;
+    a[o] = ax;
+    a[o + 1] = ay;
+    a[o + 2] = az;
+    a[o + 3] = 0;
+    a[o + 4] = nx;
+    a[o + 5] = ny;
+    a[o + 6] = nz;
+    a[o + 7] = 0;
+    a[o + 8] = zx;
+    a[o + 9] = zy;
+    a[o + 10] = zz;
     a[o + 11] = 0;
     a[o + 12] = x;
     a[o + 13] = y;
@@ -209,7 +245,7 @@ function crownLump(r: number, x: number, y: number, z: number, seed: number, y0:
   }
   g.computeVertexNormals();
   g.translate(x, y, z);
-  const geo = g.toNonIndexed();
+  const geo = g.index ? g.toNonIndexed() : g;
   const q = geo.getAttribute('position') as THREE.BufferAttribute;
   const col = new Float32Array(q.count * 3);
   for (let i = 0; i < q.count; i++) {
@@ -318,6 +354,8 @@ function buildModels(): Models {
     [-0.4, 4.35, 0.95, 1.05], [0.45, 5.75, 0.2, 1.05], [-0.5, 5.6, -0.3, 0.95], [0.1, 6.35, 0, 0.75],
   ];
   geo[FT.Canopy] = mergeGeometries(lumps.map(([x, y, z, r], i) => crownLump(r, x, y, z, i * 1.7 + 0.4, 3.2, 7.0)))!;
+  // concrete sleeper: 2.6 m × 0.24 m, 0.13 m tall from its base (half buried in the ballast)
+  geo[FT.Sleeper] = boxG(2.6, 0.13, 0.24, 0, 0.065, 0, 0x6e6a64);
   // winter: bare crown
   const br: THREE.BufferGeometry[] = [];
   for (let i = 0; i < 7; i++) {
@@ -345,6 +383,17 @@ export function furnitureModels(): Models {
 }
 
 // ── shaders for lights ─────────────────────────────────────────────────────
+
+/** fog for ADDITIVE light sprites: fade the added energy (mixing toward the fog color would add fog) */
+const ADDITIVE_FOG = /* glsl */ `
+#ifdef USE_FOG
+  #ifdef FOG_EXP2
+    float fogFactor = 1.0 - exp(-fogDensity * fogDensity * vFogDepth * vFogDepth);
+  #else
+    float fogFactor = smoothstep(fogNear, fogFar, vFogDepth);
+  #endif
+  gl_FragColor.rgb *= 1.0 - fogFactor;
+#endif`;
 
 const GLOW_VS = /* glsl */ `
 #include <common>
@@ -385,7 +434,7 @@ void main() {
   float halo = pow(1.0 - r, 2.6) * 0.3;
   float a = (core * 1.8 + halo) * uNight * vFade;
   gl_FragColor = vec4(uColor * a, 1.0);
-  #include <fog_fragment>
+  ${ADDITIVE_FOG}
 }`;
 
 const POOL_VS = /* glsl */ `
@@ -425,7 +474,7 @@ void main() {
   float w = 1.0 - r2;
   float f = w * w / (k * sqrt(k));
   gl_FragColor = vec4(uColor * f * uNight * vStrength, 1.0);
-  #include <fog_fragment>
+  ${ADDITIVE_FOG}
 }`;
 
 // signal lens: MeshBasic-like, colored by the GPU phase clock
@@ -501,7 +550,10 @@ export class FurnitureSystem {
   private lensSlots: Slot[] = [];
   private bareSlot: Slot;
   private models = furnitureModels();
+  /** painted / galvanized metal furniture (poles, signals, bollards) */
   private matFurn: THREE.MeshStandardMaterial;
+  /** stone, wood and concrete furniture (benches, planters, bins, trunks, sleepers) */
+  private matMatte: THREE.MeshStandardMaterial;
   private matCanopy: THREE.MeshStandardMaterial;
   readonly matLens: THREE.MeshBasicMaterial;
   private glow: THREE.Mesh;
@@ -514,11 +566,13 @@ export class FurnitureSystem {
   readonly poolMat: THREE.ShaderMaterial;
   readonly sigMat: THREE.ShaderMaterial;
   private snowU = { value: 0 };
+  private wetU = { value: 0 };
   private winter = false;
 
   constructor() {
     this.group.name = 'road-furniture';
-    this.matFurn = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.35 });
+    this.matFurn = this.weathered(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.35 }), 'metal');
+    this.matMatte = this.weathered(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.86, metalness: 0 }), 'matte');
     this.matCanopy = new THREE.MeshStandardMaterial({ color: 0x3f6b2a, vertexColors: true, roughness: 0.82, metalness: 0 });
     this.matCanopy.onBeforeCompile = (sh) => {
       sh.uniforms.uSnow = this.snowU;
@@ -531,12 +585,9 @@ export class FurnitureSystem {
     };
     this.matCanopy.customProgramCacheKey = () => 'urbis-road-canopy';
     this.matLens = new THREE.MeshBasicMaterial({ color: 0x222222 });
-    for (let t = 0; t < FT.COUNT; t++) {
-      const mat = t === FT.Canopy ? this.matCanopy : this.matFurn;
-      this.slots.push(this.makeSlot(this.models.geo[t], mat, 16, true));
-    }
+    for (let t = 0; t < FT.COUNT; t++) this.slots.push(this.makeSlot(this.models.geo[t], this.matOf(t), 16, t !== FT.Sleeper));
     for (let i = 0; i < 3; i++) this.lensSlots.push(this.makeSlot(this.models.lens[i], this.matLens, 16, false));
-    this.bareSlot = this.makeSlot(this.models.bare, this.matFurn, 16, true);
+    this.bareSlot = this.makeSlot(this.models.bare, this.matMatte, 16, true);
     this.bareSlot.mesh.visible = false;
 
     const quad = new THREE.PlaneGeometry(2, 2);
@@ -544,8 +595,8 @@ export class FurnitureSystem {
     this.glowGeo.setAttribute('position', quad.getAttribute('position'));
     this.poolGeo.index = quad.index;
     this.poolGeo.setAttribute('position', quad.getAttribute('position'));
-    this.glowMat = lightMaterial(GLOW_VS, GLOW_FS, { uNight: { value: 0 }, uPixel: { value: 0.001 }, uColor: { value: new THREE.Color(1.0, 0.7, 0.4) } }, true);
-    this.poolMat = lightMaterial(POOL_VS, POOL_FS, { uNight: { value: 0 }, uColor: { value: new THREE.Color(0.08, 0.048, 0.02) } }, true);
+    this.glowMat = lightMaterial(GLOW_VS, GLOW_FS, { uNight: { value: 0 }, uPixel: { value: 0.001 }, uColor: { value: new THREE.Color(1.0, 0.64, 0.32) } }, true);
+    this.poolMat = lightMaterial(POOL_VS, POOL_FS, { uNight: { value: 0 }, uColor: { value: new THREE.Color(0.1, 0.056, 0.02) } }, true);
     this.sigMat = lightMaterial(SIG_VS, SIG_FS, { uTime: { value: 0 } }, false);
     this.glow = new THREE.Mesh(this.glowGeo, this.glowMat);
     this.pool = new THREE.Mesh(this.poolGeo, this.poolMat);
@@ -566,11 +617,40 @@ export class FurnitureSystem {
     this.setInstances(this.sigGeo, 'aSig', [], 4);
   }
 
+  private matOf(t: FT): THREE.Material {
+    if (t === FT.Canopy) return this.matCanopy;
+    if (t === FT.Bench || t === FT.Bin || t === FT.Planter || t === FT.Trunk || t === FT.Sleeper) return this.matMatte;
+    return this.matFurn;
+  }
+
+  /** snow settles on up-facing surfaces, rain darkens and glosses (shared weather uniforms) */
+  private weathered(m: THREE.MeshStandardMaterial, key: string): THREE.MeshStandardMaterial {
+    m.onBeforeCompile = (sh) => {
+      sh.uniforms.uSnow = this.snowU;
+      sh.uniforms.uWet = this.wetU;
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying float vUpN;')
+        .replace(
+          '#include <beginnormal_vertex>',
+          '#include <beginnormal_vertex>\n{ vec3 wn = objectNormal;\n#ifdef USE_INSTANCING\nwn = mat3(instanceMatrix) * wn;\n#endif\nvUpN = normalize(mat3(modelMatrix) * wn).y; }',
+        );
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform float uSnow;\nuniform float uWet;\nvarying float vUpN;')
+        .replace(
+          '#include <color_fragment>',
+          '#include <color_fragment>\nfloat fSnow = smoothstep(0.6, 0.92, vUpN) * smoothstep(0.05, 0.5, uSnow);\ndiffuseColor.rgb = mix(diffuseColor.rgb * (1.0 - 0.3 * uWet), vec3(0.8, 0.83, 0.88), fSnow);',
+        )
+        .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(mix(roughnessFactor, roughnessFactor * 0.45, uWet), 0.7, fSnow);');
+    };
+    m.customProgramCacheKey = () => 'urbis-road-furniture-' + key;
+    return m;
+  }
+
   private makeSlot(geo: THREE.BufferGeometry, mat: THREE.Material, cap: number, shadow: boolean): Slot {
     const mesh = new THREE.InstancedMesh(geo, mat, cap);
     mesh.count = 0;
     mesh.castShadow = shadow;
-    mesh.receiveShadow = shadow;
+    mesh.receiveShadow = true;
     mesh.frustumCulled = true;
     this.group.add(mesh);
     return { mesh, cap };
@@ -588,7 +668,8 @@ export class FurnitureSystem {
   }
 
   /** per-frame state: night 0..1, snow cover, season canopy color, signal clock, camera pixel scale */
-  setState(night: number, snow: number, canopy: THREE.Color, winter: boolean, sigTime: number, pixel: number): void {
+  setState(night: number, snow: number, canopy: THREE.Color, winter: boolean, sigTime: number, pixel: number, wet = 0): void {
+    this.wetU.value = wet;
     const lampOn = THREE.MathUtils.smoothstep(night, 0.05, 0.6);
     this.glowMat.uniforms.uNight.value = lampOn;
     this.poolMat.uniforms.uNight.value = lampOn;
@@ -613,7 +694,7 @@ export class FurnitureSystem {
     for (let t = 0; t < FT.COUNT; t++) {
       const arrs = all.map((c) => c.mats[t]);
       const n = arrs.reduce((a, b) => a + b.length / 16, 0);
-      const slot = this.ensure(this.slots, t, n, this.models.geo[t], t === FT.Canopy ? this.matCanopy : this.matFurn, true);
+      const slot = this.ensure(this.slots, t, n, this.models.geo[t], this.matOf(t), t !== FT.Sleeper);
       this.fill(slot, arrs, n);
       if (t === FT.Canopy) {
         // reuse the instance color buffer while it is large enough
@@ -634,7 +715,7 @@ export class FurnitureSystem {
         if (n > bare.cap) {
           this.group.remove(bare.mesh);
           bare.mesh.dispose();
-          const b = this.makeSlot(this.models.bare, this.matFurn, Math.ceil(n * 1.5) + 16, true);
+          const b = this.makeSlot(this.models.bare, this.matMatte, Math.ceil(n * 1.5) + 16, true);
           b.mesh.visible = this.winter;
           this.bareSlot = b;
         }
@@ -741,6 +822,7 @@ export class FurnitureSystem {
     this.poolMat.dispose();
     this.sigMat.dispose();
     this.matFurn.dispose();
+    this.matMatte.dispose();
     this.matCanopy.dispose();
     this.matLens.dispose();
   }

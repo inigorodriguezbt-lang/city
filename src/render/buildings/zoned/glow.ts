@@ -28,6 +28,7 @@ uniform float uViewH;
 varying vec3 vCol;
 varying vec2 vUv;
 varying float vA;
+varying float vKind;
 #include <common>
 #include <fog_pars_vertex>
 #include <logdepthbuf_pars_vertex>
@@ -42,7 +43,6 @@ void main() {
   }
   else if (kind < 2.5) a = 0.06 + 0.94 * night;
   else a = night * 0.85;
-  vA = a;
   vCol = iCol;
   vUv = position.xy;
   vec4 mv = viewMatrix * vec4(iPos, 1.0);
@@ -50,6 +50,11 @@ void main() {
   // keep a minimum on-screen size so distant lights twinkle instead of vanishing
   float minWorld = dist * 3.2 / (projectionMatrix[1][1] * uViewH);
   float size = max(iData.x, minWorld * (kind > 0.5 && kind < 1.5 ? 2.2 : 1.4));
+  // close up, big sprites read as lens flares: fade them by on-screen size
+  float px = size * projectionMatrix[1][1] * uViewH / (2.0 * dist);
+  a *= clamp(90.0 / max(px, 1.0), 0.3, 1.0);
+  vA = a;
+  vKind = kind;
   mv.xy += position.xy * size * (a > 0.001 ? 1.0 : 0.0);
   // pull slightly toward the camera so glows are not swallowed by their own fixture
   mv.xyz += normalize(-mv.xyz) * min(1.5, iData.x * 0.4);
@@ -64,6 +69,7 @@ const FRAG = /* glsl */ `
 varying vec3 vCol;
 varying vec2 vUv;
 varying float vA;
+varying float vKind;
 #include <common>
 #include <fog_pars_fragment>
 #include <logdepthbuf_pars_fragment>
@@ -73,7 +79,10 @@ void main() {
   if (r2 > 1.0) discard;
   float core = exp(-r2 * 18.0);
   float halo = exp(-r2 * 4.0) * 0.45;
-  vec3 c = vCol * (halo + core * 1.6) + vec3(core * 0.6);
+  vec3 c;
+  if (vKind > 2.5) { float k = 1.0 - r2; c = vCol * k * k * k * 0.28; } // floodlight: soft pool of light, no hot core
+  else if (vKind > 1.5) c = vCol * (halo + core * 1.3) + vec3(core * 0.12); // neon keeps its hue
+  else c = vCol * (halo + core * 1.6) + vec3(core * 0.5);
   float keep = 1.0;
 #ifdef USE_FOG
   // additive glow: haze swallows it instead of tinting it
@@ -83,7 +92,10 @@ void main() {
   keep = 1.0 - smoothstep(fogNear, fogFar, vFogDepth) * 0.85;
   #endif
 #endif
-  gl_FragColor = vec4(c * vA * keep, 1.0);
+  // calibrated for the night eye adaptation (exposure ≈ ×4)
+  gl_FragColor = vec4(c * vA * keep * 0.45, 1.0);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
 }
 `;
 
@@ -99,7 +111,9 @@ export function glowMaterial(): THREE.ShaderMaterial {
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
-      toneMapped: false,
+      // the game renders into an HDR target and tone-maps in post (no-op there);
+      // when drawn straight to screen the glow follows the scene's exposure
+      toneMapped: true,
       fog: true,
     });
     material.name = 'bld:glow';

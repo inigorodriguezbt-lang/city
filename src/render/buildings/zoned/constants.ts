@@ -33,6 +33,9 @@ export enum WinKind {
   Strip = 9,
   /** railing panel (metal / glass parts only): balusters or frosted pane + handrail */
   Rail = 20,
+  /** advert / media screen (emissive / neon parts only): procedural ad art;
+   *  facade byte 2 = panel height × 16 */
+  Ad = 21,
 }
 
 /** Facade flags (facade code byte 3). */

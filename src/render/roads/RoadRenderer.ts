@@ -50,6 +50,8 @@ export class RoadRenderer {
   private grid: ChunkGrid | null = null;
   private hf: RoadHeightField | null = null;
   private ownSurface: RoadSurface | null = null;
+  /** the game's RoadSurface whose heightAt currently delegates to our height field */
+  private boundSurface: RoadSurface | null = null;
   private builder: ChunkBuilder | null = null;
   private chunks = new Map<number, ChunkState>();
   private material: THREE.MeshStandardMaterial;
@@ -82,6 +84,7 @@ export class RoadRenderer {
       surface = this.ownSurface;
     }
     this.hf = new RoadHeightField(world, surface);
+    if (surface !== this.ownSurface) this.bindSurface(surface, this.hf);
     this.builder = new ChunkBuilder(world, this.hf);
     this.grid = new ChunkGrid(world.size);
     this.grid.markAll();
@@ -103,6 +106,7 @@ export class RoadRenderer {
     this.furniture.clear();
     this.furniture.flush();
     this.group.removeFromParent();
+    this.unbindSurface();
     this.world = null;
     this.grid = null;
     this.hf = null;
@@ -158,6 +162,27 @@ export class RoadRenderer {
     this.grid?.markAll();
   }
 
+  /**
+   * Make `game.roadSurface.heightAt` (what vehicles, pedestrians and tools
+   * sample) return exactly the rendered drivable surface: identical to the
+   * frozen implementation on plain cells, plus continuous bridge decks and the
+   * eased approach ramps of the bridge ends (which the flat per-cell deck model
+   * cannot express). Undone on unload.
+   */
+  private bindSurface(surface: RoadSurface, hf: RoadHeightField): void {
+    this.unbindSurface();
+    surface.heightAt = (wx: number, wz: number): number => hf.heightAt(wx, wz);
+    this.boundSurface = surface;
+  }
+
+  private unbindSurface(): void {
+    const s = this.boundSurface;
+    if (!s) return;
+    // drop the own-property override → the prototype method is visible again
+    delete (s as unknown as Record<string, unknown>).heightAt;
+    this.boundSurface = null;
+  }
+
   // ── internals ─────────────────────────────────────────────────────────────
   private hasSignals(x: number, y: number): boolean {
     const w = this.world!;
@@ -186,7 +211,9 @@ export class RoadRenderer {
   /** a changed bank or deck can move the whole bridge: mark every chunk its runs touch */
   private markBridgeRuns(r: Rect): void {
     const w = this.world!, g = this.grid!;
-    const x0 = Math.max(0, r.x0 - 3), y0 = Math.max(0, r.y0 - 3), x1 = Math.min(w.size - 1, r.x1 + 3), y1 = Math.min(w.size - 1, r.y1 + 3);
+    // approach ramps reach up to 3 cells from a bridge end and depend on the land run up to 7 cells away
+    const P = 8;
+    const x0 = Math.max(0, r.x0 - P), y0 = Math.max(0, r.y0 - P), x1 = Math.min(w.size - 1, r.x1 + P), y1 = Math.min(w.size - 1, r.y1 + P);
     if ((x1 - x0 + 1) * (y1 - y0 + 1) > 20000) return; // huge edits already dirty most chunks
     for (let y = y0; y <= y1; y++)
       for (let x = x0; x <= x1; x++) {
@@ -196,7 +223,7 @@ export class RoadRenderer {
           while (a < 256 && w.isBridge(x - dx * (a + 1), y - dy * (a + 1))) a++;
           while (b < 256 && w.isBridge(x + dx * (b + 1), y + dy * (b + 1))) b++;
           if (a + b === 0) continue;
-          g.markRect({ x0: x - dx * a, y0: y - dy * a, x1: x + dx * b, y1: y + dy * b }, 3);
+          g.markRect({ x0: x - dx * a, y0: y - dy * a, x1: x + dx * b, y1: y + dy * b }, P);
         }
       }
   }
@@ -349,7 +376,7 @@ export class RoadRenderer {
     const winter = cal.season === 'winter' && w.theme.snowiness > 0.02;
     const cam3 = r.camera;
     const px = (2 * Math.tan(THREE.MathUtils.degToRad(cam3.fov) / 2)) / Math.max(1, r.canvas.clientHeight || r.canvas.height || 800);
-    this.furniture.setState(r.lighting.night, this.snow, this.canopy, winter, this.sigTime, px);
+    this.furniture.setState(r.lighting.night, this.snow, this.canopy, winter, this.sigTime, px, this.wet);
     void cam;
     void this.tmpV;
     void this.sphere;

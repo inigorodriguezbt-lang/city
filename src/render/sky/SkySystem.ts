@@ -310,11 +310,15 @@ export class SkySystem {
     if (this.ambientTimer <= 0 || snap) {
       this.ambientTimer = 0.15;
       atm.radiance(_v.set(0, 1, 0), this.zenith);
+      // mean sky radiance over the dome: mid-elevation ring, low ring (the
+      // bright horizon glow at dusk) and the zenith
       const amb = _c2.setRGB(0, 0, 0);
       for (let i = 0; i < 6; i++) {
         const a = (i / 6) * Math.PI * 2;
         atm.radiance(_v.set(Math.cos(a) * 0.82, 0.57, Math.sin(a) * 0.82), _c);
-        amb.add(_c);
+        amb.add(_c.multiplyScalar(0.65));
+        atm.radiance(_v.set(Math.cos(a + 0.5) * 0.99, 0.14, Math.sin(a + 0.5) * 0.99), _c);
+        amb.add(_c.multiplyScalar(0.35));
       }
       amb.multiplyScalar(1 / 6).lerp(this.zenith, 0.3);
       this.skyAmbient.copy(amb);
@@ -407,7 +411,10 @@ export class SkySystem {
     this.hemi.groundColor.copy(this.groundColor).multiplyScalar(1 / Math.max(1e-3, Math.max(this.groundColor.r, this.groundColor.g, this.groundColor.b, 1e-3)));
     // sky irradiance reaches PBR/Lambert/Phong materials through scene.environment (IBL);
     // the hemisphere light is only a small fill for materials without IBL
-    this.hemi.intensity = lum(ambient) * 0.35 + 0.012;
+    // at dusk and at night the sky dome is dim but the eye adapts: an extra
+    // sky-coloured fill keeps the ground readable while the horizon glows
+    const fillK = 1 - THREE.MathUtils.smoothstep(sunDir.y, 0.0, 0.3);
+    this.hemi.intensity = lum(ambient) * (0.35 + 1.0 * fillK) + 0.012;
     this.fitShadow(ctx, keyDir);
 
     // exposure & bloom adaptation

@@ -271,7 +271,7 @@ const SPECIES: Record<PropKind, SpeciesDef> = {
       const bark = rgb('#ddd8cc');
       if (lod === 1) {
         b.cylinder([0, 0, 0], [0, 10, 0], 0.22, 0.12, 3, bark, bark);
-        b.blob([0, 9.5, 0], [2.4, 4.2, 2.4], rgb('#6a8f36'), K_LEAF, rgb('#d9b62a'), 0, 0.15);
+        b.blob([0, 9.5, 0], [2.4, 4.2, 2.4], rgb('#5e8434'), K_LEAF, rgb('#d9b62a'), 0, 0.15);
         return;
       }
       const rng = b.rng;
@@ -284,7 +284,7 @@ const SPECIES: Record<PropKind, SpeciesDef> = {
         const a = rng.next() * Math.PI * 2;
         const rr = i === 0 ? 0 : 1.1 + rng.next() * 0.6;
         const y = 8 + i * 1.1;
-        b.blob([Math.cos(a) * rr, y, Math.sin(a) * rr], [1.7, 2.3, 1.7], rgb('#6a8f36'), K_LEAF, rgb('#d9b62a'), 0, 0.3);
+        b.blob([Math.cos(a) * rr, y, Math.sin(a) * rr], [1.7, 2.3, 1.7], rgb('#5e8434'), K_LEAF, rgb('#d9b62a'), 0, 0.3);
       }
     },
   },

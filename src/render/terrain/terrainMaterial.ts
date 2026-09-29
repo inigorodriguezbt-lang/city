@@ -117,13 +117,13 @@ void terrainShade(out vec3 alb, out float rough, out vec3 nW, out vec3 emis) {
   // meadow: moisture, exposure (south-facing slopes dry out), season
   float dry = clamp(uDry + (macro - 0.5) * 1.1 + (0.5 - moist) * 0.9 + nW.z * 0.35 + (meso - 0.5) * 0.45, 0.0, 1.0);
   // turf reads less saturated than its swatch colour from altitude
-  vec3 gLive = mix(vec3(dot(uGrass, vec3(0.2126, 0.7152, 0.0722))), uGrass, 0.76);
+  vec3 gLive = mix(vec3(dot(uGrass, vec3(0.2126, 0.7152, 0.0722))), uGrass, 0.68);
   vec3 grass = mix(gLive * 0.78, uGrassDry * 0.82, smoothstep(0.12, 0.9, dry));
   // lush, darker bluish-green hollows vs sunlit yellow-green swards
   float lushN = smoothstep(0.35, 0.75, nA.g * 0.6 + moist * 0.5 - cav * 0.2);
   grass = mix(grass, grass * vec3(0.72, 0.86, 0.78), lushN * 0.8);
   grass = mix(grass, grass * vec3(1.1, 1.05, 0.76), smoothstep(0.6, 0.9, meso) * 0.3);
-  grass *= 0.78 + 0.44 * meso * (0.7 + 0.3 * det);
+  grass *= 0.86 + 0.28 * meso * (0.7 + 0.3 * det);
   grass = mix(grass, grass * vec3(1.02, 1.04, 0.86), uLush * (1.0 - dry) * 0.6);
   grass = mix(grass, mix(grass, uGrassDry * vec3(1.05, 0.88, 0.62), 0.55), uAutumn * (0.45 + 0.55 * macro));
   grass *= mix(1.0, 0.8 + 0.4 * micro, detailFade);
@@ -199,11 +199,12 @@ void terrainShade(out vec3 alb, out float rough, out vec3 nW, out vec3 emis) {
   float nearWater = 1.0 - smoothstep(mix(10.0, 24.0, seaWater), mix(34.0, 90.0, seaWater), shore + (det - 0.5) * 24.0);
   float beach = nearWater * (1.0 - smoothstep(mix(0.3, 1.2, seaWater), mix(1.1, 3.6, seaWater), above + (meso - 0.5) * 1.6)) * (1.0 - smoothstep(0.22, 0.42, slope));
   vec3 sand = uSand * (0.86 + 0.22 * det) * (0.94 + 0.12 * micro);
-  vec3 bank = mix(uDirt * 0.85, uSand * 0.8, 0.35 + 0.3 * det);
+  // lake and river banks: dark damp soil fringed with grass (sea: sand)
+  vec3 bank = mix(uDirt * 0.62, grass * 0.8, 0.25 + 0.35 * det);
   col = mix(col, mix(bank, sand, seaWater), beach * mix(0.75, 1.0, seaWater));
   float wetBand = (1.0 - smoothstep(0.0, 0.6 + 0.6 * det, above)) * nearWater;
   float under = smoothstep(0.05, -0.5, above);
-  vec3 silt = mix(uSand, uDirt, mix(0.7, 0.4, seaWater)) * mix(0.72, 0.42, smoothstep(0.0, 8.0, -above));
+  vec3 silt = mix(uSand, uDirt, mix(0.8, 0.4, seaWater)) * mix(0.72, 0.42, smoothstep(0.0, 8.0, -above)) * mix(0.6, 1.0, seaWater);
   col = mix(col, silt, under);
 
   // snow: altitude snow line + weather snow cover (patchy while melting)
@@ -231,6 +232,12 @@ void terrainShade(out vec3 alb, out float rough, out vec3 nW, out vec3 emis) {
   // wetness: rain soaks everything, shorelines are always damp. Bare soil,
   // sand and rock darken and turn glossy; turf only darkens a little.
   float hard = clamp(max(max(rockMask, dirtMask * 0.85), beach), 0.0, 1.0);
+  // turf sheen: grass blades seen at grazing angles read lighter and silvery
+  float turf = (1.0 - hard) * (1.0 - snow) * (1.0 - under) * (1.0 - forest * 0.85) * (1.0 - uArid * 0.7);
+  float ndv = clamp(dot(nW, normalize(cameraPosition - vWPos)), 0.0, 1.0);
+  col = mix(col, col * vec3(1.22, 1.26, 1.18) + vec3(0.01, 0.012, 0.012), pow(1.0 - ndv, 4.0) * turf * 0.45);
+  // living turf is darker than its swatch colour suggests (keeps noon meadows from going lime)
+  col *= mix(1.0, 0.84, turf * (1.0 - uArid));
   float wet = max(uWetness * 0.85 * (1.0 - snow), wetBand * 0.9);
   col *= mix(1.0, mix(0.76, 0.56, hard), wet * (1.0 - under));
   // rain puddles collect in flat hollows of bare ground

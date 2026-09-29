@@ -106,8 +106,8 @@ void main() {
   // scotopic (moonlit) vision: dark areas shift toward a readable blue while
   // lamps, windows and the lit sky keep their colour
   if (uNightLift > 0.0) {
-    float nl = uNightLift * (1.0 - smoothstep(0.02, 0.3, l));
-    c = mix(c, vec3(l) * vec3(0.62, 0.8, 1.2) * 1.7 + vec3(0.0012, 0.0018, 0.0036), nl * 0.75);
+    float nl = uNightLift * (1.0 - smoothstep(0.03, 0.3, l));
+    c = mix(c, vec3(l) * vec3(0.6, 0.8, 1.25) * 2.4 + vec3(0.0026, 0.0042, 0.0085), nl * 0.8);
     l = dot(c, LUMA);
   }
   c = max(mix(vec3(l), c, uSat), 0.0);

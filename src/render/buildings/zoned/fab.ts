@@ -36,6 +36,9 @@ export interface LodMass {
   wall: V3;
   roof: V3;
   fac: LodFacade;
+  /** roof prism instead of a box: 1 = gable, 2 = hip (ridge along local X,
+   *  eaves at y0, ridge at y0 + h); walls below are separate masses */
+  ridge?: number;
 }
 
 /** Animated part with optional rocking (amplitude in radians; 0 = continuous spin). */
@@ -168,13 +171,15 @@ export class Fab {
   }
 
   // ── LOD masses ──────────────────────────────────────────────────────────
-  mass(cx: number, cz: number, w: number, d: number, y0: number, h: number, wall: ColorLike, roof: ColorLike, fac: LodFacade): void {
+  mass(cx: number, cz: number, w: number, d: number, y0: number, h: number, wall: ColorLike, roof: ColorLike, fac: LodFacade, ridge = 0): void {
     if (w <= 0.2 || d <= 0.2 || h <= 0.05) return;
     _p.set(cx, y0, cz).applyMatrix4(this.cur);
     this.cur.decompose(new THREE.Vector3(), _q, _s);
     _e.setFromQuaternion(_q, 'YXZ');
     const sc = _s.x;
-    this.masses.push({ cx: _p.x, cz: _p.z, w: w * sc, d: d * sc, y0: _p.y, h: h * sc, rot: _e.y, wall: rgb(wall), roof: rgb(roof), fac });
+    const m: LodMass = { cx: _p.x, cz: _p.z, w: w * sc, d: d * sc, y0: _p.y, h: h * sc, rot: _e.y, wall: rgb(wall), roof: rgb(roof), fac };
+    if (ridge) m.ridge = ridge;
+    this.masses.push(m);
     this.reach(y0 + h);
   }
 

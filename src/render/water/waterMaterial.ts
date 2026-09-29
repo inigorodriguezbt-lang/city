@@ -161,6 +161,9 @@ export function createWaterMaterial(wu: WaterUniforms, shared: SharedUniforms, s
         #endif
         amp *= mix(1.0, 0.3, smoothstep(250.0, 3500.0, camDist));
         amp *= smoothstep(0.0, 1.2, depth) * 0.7 + 0.3;
+        // grazing views: calmer normals so reflections read as a mirror, not glitter
+        float viewUp = abs(normalize(cameraPosition - vWPos).y);
+        amp *= mix(0.4, 1.0, smoothstep(0.03, 0.35, viewUp));
         sl *= amp;
         sl += rainRipples(wp, uRain * (1.0 - smoothstep(60.0, 220.0, camDist)));
         vec3 wN = normalize(vec3(-sl.x, 1.0, -sl.y));
@@ -176,10 +179,22 @@ export function createWaterMaterial(wu: WaterUniforms, shared: SharedUniforms, s
         #else
           float foamW = 0.2 + 0.25 * fn;
         #endif
-        float edge = 1.0 - smoothstep(0.0, foamW, depth);
+        // horizontal distance to the waterline (depth / bottom slope): keeps the
+        // surf band a few metres wide even over very flat shallows (no white flats)
+        float bottomSlope = fwidth(depth) / max(length(fwidth(wp)), 1e-3);
+        float shoreDist = depth / max(bottomSlope, 1e-3);
+        float edge = (1.0 - smoothstep(0.0, foamW, depth)) * (1.0 - smoothstep(5.0, 16.0 + 14.0 * fn, shoreDist));
         float bands = 0.5 + 0.5 * sin(depth * 7.0 - t * 1.6 + fn * 8.0);
         float foam = edge * smoothstep(0.35, 0.8, fn2 * 0.6 + bands * 0.55);
-        foam = max(foam, (1.0 - smoothstep(0.0, 0.1, depth)) * 0.5);
+        #ifdef WATER_SEA
+          foam = max(foam, (1.0 - smoothstep(0.0, 0.1, depth)) * 0.5 * (1.0 - smoothstep(2.0, 8.0, shoreDist)));
+        #else
+          // rivers and lakes: a faint lap line; white water only on fast reaches (rapids)
+          float rapid = smoothstep(0.35, 0.9, length(fl));
+          foam *= 0.35 + 0.65 * rapid;
+          foam = max(foam, (1.0 - smoothstep(0.0, 0.08, depth)) * 0.22);
+          foam = max(foam, rapid * smoothstep(0.55, 0.8, fn2 * 0.7 + n2.x * 0.3) * 0.6 * (1.0 - smoothstep(300.0, 1500.0, camDist)));
+        #endif
         #ifdef WATER_SEA
           float crest = smoothstep(0.35, 0.6, n1.x * 0.5 + n3.y * 0.5 + fn2 * 0.3) * clamp((uWindSpeed - 8.0) / 10.0, 0.0, 1.0);
           foam = max(foam, crest * 0.7 * (1.0 - smoothstep(400.0, 2500.0, camDist)));
@@ -192,7 +207,12 @@ export function createWaterMaterial(wu: WaterUniforms, shared: SharedUniforms, s
         float blw = max(2.5, camDist * 0.0018);
         float borderLine = exp(-(bsd * bsd) / (blw * blw));
         diffuseColor.rgb = mix(wcol, vec3(0.92, 0.95, 0.97), foam);
-        float wA = clamp(1.0 - exp(-depth * 0.65), 0.0, 1.0);
+        #ifdef WATER_SEA
+          float wA = clamp(1.0 - exp(-depth * 0.65), 0.0, 1.0);
+        #else
+          // fresh water carries silt and tannins: it turns opaque quickly
+          float wA = clamp(1.0 - exp(-depth * 1.1), 0.0, 1.0);
+        #endif
         wA = max(wA, foam * 0.95);
         `,
       )

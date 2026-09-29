@@ -97,8 +97,9 @@ export function constructionModel(full: ZModel, ctx: ModelContext, progress: num
   pile(f, W / 2 - 4, D / 2 - 4, 2.2, 1.6, 'sand', '#cdb58a');
   B.box('wood', W / 2 - 4, GROUND, D / 2 - 9, 3, 0.8, 1.6, '#c8a070');
   const stageP = constructionStage(progress) / 8;
-  const masses = full.masses.filter((m) => m.h > 1.2 && m.w > 2 && m.d > 2);
-  const maxTop = masses.reduce((a, m) => Math.max(a, m.y0 + m.h), 0) || full.height;
+  const maxTop = full.masses.reduce((a, m) => (m.h > 1.2 && m.w > 2 && m.d > 2 ? Math.max(a, m.y0 + m.h) : a), 0) || full.height;
+  // scaffolds wrap wall volumes (roof prisms rise inside them)
+  const masses = full.masses.filter((m) => !m.ridge && m.h > 1.2 && m.w > 2 && m.d > 2);
   if (stageP <= 0.12) {
     // excavation + foundations
     for (const m of masses) {

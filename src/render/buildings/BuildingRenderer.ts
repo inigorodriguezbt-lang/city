@@ -31,8 +31,9 @@ import { themeDef } from '../../data/themes';
 import { zoneById, zoneDef } from '../../data/zones';
 import { buildingDef } from '../../data/buildings';
 import { getModel } from './registry';
+import { ModelBuilder } from './ModelBuilder';
 import type { ModelContext, ModelEmitter, ModelLight, ModelPart, ModelResult } from './types';
-import { getAnimDepthMaterials, getChunkMaterial, ghostMaterial, setMaterialWeather, updateMaterials } from './materials';
+import { getAnimDepthMaterials, getChunkMaterial, ghostDepthMaterial, ghostMaterial, setExposureCompensation, setMaterialWeather, updateMaterials } from './materials';
 import { buildZoned, schedFor } from './zoned';
 import { civicFallback } from './zoned/civic';
 import { constructionModel, constructionStage, rubbleModel, weatherModel } from './zoned/states';
@@ -45,8 +46,9 @@ import { ProblemIcons, topProblems, type IconInstance } from './icons/ProblemIco
 
 const DETAIL_CHUNK = 16;
 const LOD_CHUNK = 32;
-/** frame budget for model generation + merging (ms) */
-const BUDGET_MS = 4;
+/** frame budget for model generation + merging (ms); forced background
+ *  progress (far LOD merges / model refinement) adds ≈0.5 ms on average */
+const BUDGET_MS = 3.5;
 /** cached detailed geometry budget (vertices) before far models drop their geometry */
 const VERT_BUDGET = 2_600_000;
 const ICON_RANGE = 1500;
@@ -91,6 +93,9 @@ interface BInfo {
   cz: number;
   fw: number;
   fd: number;
+  /** placement at registration (in-place moves re-register the building) */
+  rot: Dir;
+  area: number;
 }
 
 interface DetailChunk {
@@ -190,10 +195,10 @@ export class BuildingRenderer {
     this.detailGrid = new ChunkGrid(world.size, DETAIL_CHUNK);
     this.lodGrid = new ChunkGrid(world.size, LOD_CHUNK);
     this.settingsSig = this.currentSettingsSig();
-    for (const b of world.buildings.values()) this.addBuilding(b, false);
+    for (const b of world.buildings.values()) this.addBuilding(b);
     const ev = this.game.events;
     this.unsub.push(
-      ev.on('building:added', (b) => this.addBuilding(b, true)),
+      ev.on('building:added', (b) => this.addBuilding(b)),
       ev.on('building:removed', (b) => this.removeBuilding(b)),
       ev.on('building:changed', (b) => this.changeBuilding(b)),
       ev.on('world:changed', ({ rect, layers }) => this.onWorldChanged(rect, layers)),
@@ -220,6 +225,10 @@ export class BuildingRenderer {
     }
     this.fullCache.clear();
     this.pollIds = [];
+    this.pendingDetail.length = 0;
+    this.candidates.length = 0;
+    this.lodDirty.length = 0;
+    this.detailSet.clear();
     this.cachedVerts = 0;
     this.icons.set([]);
     this.detailGrid = this.lodGrid = null;
@@ -227,13 +236,13 @@ export class BuildingRenderer {
   }
 
   // ── building bookkeeping ──────────────────────────────────────────────
-  private addBuilding(b: Building, live: boolean): void {
+  private addBuilding(b: Building): void {
     if (!this.world || !this.detailGrid || this.binfo.has(b.id)) return;
     const n = b.rot === Dir.N || b.rot === Dir.S;
     const fw = n ? b.w : b.h, fd = n ? b.h : b.w;
     const cx = (b.x + b.w / 2) * CELL, cz = (b.y + b.h / 2) * CELL;
     const chunk = this.detailGrid.chunkOfCell(Math.min(this.world.size - 1, Math.floor(b.x + b.w / 2)), Math.min(this.world.size - 1, Math.floor(b.y + b.h / 2)));
-    const bi: BInfo = { b, chunk, matrix: new THREE.Matrix4(), ground: 0, key: '', sig: 0, geo: 0, stamp: 0, info: 0, model: null, emitters: [], cx, cz, fw, fd };
+    const bi: BInfo = { b, chunk, matrix: new THREE.Matrix4(), ground: 0, key: '', sig: 0, geo: 0, stamp: 0, info: 0, model: null, emitters: [], cx, cz, fw, fd, rot: b.rot, area: b.w * b.h };
     this.placeBuilding(bi);
     bi.key = this.modelKey(b, fw, fd);
     bi.geo = this.geoDigest(b);
@@ -245,7 +254,6 @@ export class BuildingRenderer {
     dc.ids.add(b.id);
     this.markChunk(chunk);
     this.refineQueue.push(b.id);
-    void live;
   }
 
   private removeBuilding(b: Building): void {
@@ -262,7 +270,13 @@ export class BuildingRenderer {
 
   private changeBuilding(b: Building): void {
     const bi = this.binfo.get(b.id);
-    if (!bi) return this.addBuilding(b, true);
+    if (!bi) return this.addBuilding(b);
+    // moved / rotated / resized in place: re-register (new chunk, transform, model)
+    if ((b.x + b.w / 2) * CELL !== bi.cx || (b.y + b.h / 2) * CELL !== bi.cz || b.rot !== bi.rot || b.w !== bi.b.w || b.h !== bi.b.h || b.w * b.h !== bi.area) {
+      this.removeBuilding(bi.b);
+      this.addBuilding(b);
+      return;
+    }
     bi.b = b;
     this.refresh(bi, true);
   }
@@ -548,7 +562,22 @@ export class BuildingRenderer {
     });
     const masses = (res as Partial<ZModel>).masses ?? massesFromParts(res.parts, ctx.width, ctx.depth);
     if (!masses.length) masses.push({ cx: 0, cz: 0, w: ctx.width * 0.6, d: ctx.depth * 0.6, y0: 0, h: Math.max(3, res.height * 0.8), rot: 0, wall: [0.7, 0.7, 0.68], roof: [0.45, 0.45, 0.45], fac: LodFacade.Punched });
-    return { parts: res.parts, anims, lights: res.lights ?? [], emitters: res.emitters ?? [], masses, height: res.height };
+    const parts = res.parts.slice();
+    // foundation skirt (≈3 m below the lot) for models that do not bring their own
+    let minY = Infinity;
+    for (const p of parts) {
+      const pos = p.geometry.getAttribute('position') as THREE.BufferAttribute;
+      const a = pos.array as ArrayLike<number>;
+      for (let i = 1; i < a.length; i += 3) if (a[i] < minY) minY = a[i];
+    }
+    if (minY > -1) {
+      const skirt = new ModelBuilder().box('concrete', 0, -3, 0, ctx.width - 0.1, 3.08, ctx.depth - 0.1, 0x6f6c66, { top: false }).build();
+      for (const p of skirt) {
+        addFac(p.geometry, 0);
+        parts.push(p);
+      }
+    }
+    return { parts, anims, lights: res.lights ?? [], emitters: res.emitters ?? [], masses, height: res.height };
   }
 
   private ensureModel(bi: BInfo, needGeometry: boolean): boolean {
@@ -635,12 +664,15 @@ export class BuildingRenderer {
     setMaterialWeather(shared?.uWetness?.value ?? 0, shared?.uSnow?.value ?? 0);
     const viewH = game.renderer.renderer.domElement.height || 800;
     updateGlow(night, game.time, viewH);
-    this.icons.update(game.time, viewH);
+    const exposure = (game.renderer as { sky?: { exposure?: number } }).sky?.exposure ?? 1;
+    const expComp = 1 / Math.max(0.25, exposure);
+    setExposureCompensation(expComp);
+    this.icons.update(game.time, viewH, expComp);
+    if (this.hlMat) this.hlMat.uniforms.uExpComp.value = expComp;
     this.glowGroup.visible = night > 0.03;
     if (this.hl) this.animateHighlight();
     if (!this.world || !this.detailGrid) return;
     this.frame++;
-    void dt;
     const t0 = performance.now();
     const cam = game.renderer.camera.position;
     this.classify(cam);
@@ -864,7 +896,7 @@ export class BuildingRenderer {
   }
 
   /** dirty LOD chunks, nearest first, within what is left of the frame budget
-   *  (one is forced every other frame so the far city always converges) */
+   *  (one is forced every 4th frame so the far city always converges) */
   private rebuildLod(t0: number): void {
     const dirty = this.lodDirty;
     dirty.length = 0;
@@ -873,7 +905,7 @@ export class BuildingRenderer {
     const cam = this.game.renderer.camera.position;
     for (const l of dirty) l.dist = (l.cx - cam.x) ** 2 + (l.cz - cam.z) ** 2;
     dirty.sort(byDist);
-    let forced = this.frame % 2 === 0;
+    let forced = this.frame % 4 === 0;
     for (const l of dirty) {
       if (performance.now() - t0 > BUDGET_MS && !forced) break;
       forced = false;
@@ -976,7 +1008,7 @@ export class BuildingRenderer {
     }
     // always make a little progress so far LOD boxes converge even when the
     // detail rebuilds consume the whole frame budget
-    let forced = this.frame % 3 === 0;
+    let forced = this.frame % 6 === 3;
     while (this.refineQueue.length && (forced || performance.now() - t0 < BUDGET_MS)) {
       forced = false;
       const id = this.refineQueue.pop()!;
@@ -1086,7 +1118,7 @@ export class BuildingRenderer {
   private highlightMaterial(): THREE.ShaderMaterial {
     if (!this.hlMat) {
       this.hlMat = new THREE.ShaderMaterial({
-        uniforms: { uColor: { value: new THREE.Color(0x5cd6ff) }, uPulse: { value: 0.5 } },
+        uniforms: { uColor: { value: new THREE.Color(0x5cd6ff) }, uPulse: { value: 0.5 }, uExpComp: { value: 1 } },
         vertexShader: /* glsl */ `
           varying vec3 vN; varying vec3 vW;
           #include <common>
@@ -1099,7 +1131,7 @@ export class BuildingRenderer {
             #include <logdepthbuf_vertex>
           }`,
         fragmentShader: /* glsl */ `
-          uniform vec3 uColor; uniform float uPulse;
+          uniform vec3 uColor; uniform float uPulse; uniform float uExpComp;
           varying vec3 vN; varying vec3 vW;
           #include <common>
           #include <logdepthbuf_pars_fragment>
@@ -1108,7 +1140,7 @@ export class BuildingRenderer {
             vec3 v = normalize(cameraPosition - vW);
             float rim = pow(1.0 - abs(dot(normalize(vN), v)), 2.0);
             float a = 0.16 + 0.12 * uPulse + rim * 0.55;
-            gl_FragColor = vec4(uColor * (0.7 + rim), a);
+            gl_FragColor = vec4(uColor * (0.7 + rim) * uExpComp, a);
           }`,
         transparent: true,
         depthWrite: false,
@@ -1236,6 +1268,12 @@ export class BuildingRenderer {
     for (const g of geos) g.dispose();
     for (const p of model.parts) p.geometry.dispose();
     for (const a of model.anims) a.part.geometry.dispose();
+    // depth-only pass first (after the opaque scene) so the translucent ghost
+    // shows just its front-most surfaces instead of a tangle of back faces
+    const depth = new THREE.Mesh(merged, ghostDepthMaterial());
+    depth.renderOrder = 19;
+    depth.name = 'bld:preview-depth';
+    grp.add(depth);
     const mesh = new THREE.Mesh(merged, ghostMaterial(true));
     mesh.renderOrder = 20;
     mesh.name = 'bld:preview-body';

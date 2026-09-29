@@ -1,15 +1,26 @@
 // Sandbox gallery for the zoned building generators + material library.
 // URL params:
 //   zones=res_low,res_med|all  styles=european,nordic|all  levels=1,3,5  lot=2x3
-//   hour=15  detail=high|medium|low  state=normal|abandoned|burned|fire|flooded|construction:0.4|collapsed
-//   lod=1 (show far-LOD boxes)  cam=overview|close|street|x,y,z,tx,ty,tz  seed=7  layout=grid|street
+//   hour=15  detail=high|medium|low  theme=temperate|…  seed=7
+//   state=normal|abandoned|burned|fire|flooded|collapsed|construction:0.4
+//         |stages (construction progress rising with the level column)
+//         |mix (lots cycle through every state)
+//   lod=1 (show the far-LOD boxes instead)  snow=0..1  wet=0..1
+//   cam=overview|close|street|x,y,z,tx,ty,tz  layout=bylevel|bystyle
+//   test=1 (generate every zone × style × level × lot: errors + triangle budgets)
+//   test=2 (timing of full / construction / rubble / weathered variants)
+//   test=3 (compile + draw every material variant; shader errors → console)
+// The real BuildingRenderer (chunks, LOD, glow, icons, highlight, previews,
+// service registry models) is exercised by city.html (see city.ts).
 import * as THREE from 'three';
 import { RNG, hash2 } from '../../src/core/rng';
 import { ZoneType, type StyleId } from '../../src/core/types';
 import { STYLES, styleDef } from '../../src/data/styles';
 import { ZONES, zoneById } from '../../src/data/zones';
 import { themeDef } from '../../src/data/themes';
-import { getChunkMaterial, getAnimDepthMaterials, setMaterialWeather, updateMaterials } from '../../src/render/buildings/materials';
+import { getChunkMaterial, getAnimDepthMaterials, getAnimMaterial, getLodMaterial, getMaterial, ghostDepthMaterial, ghostMaterial, setMaterialWeather, updateMaterials } from '../../src/render/buildings/materials';
+import { ModelBuilder } from '../../src/render/buildings/ModelBuilder';
+import { MAT_KEYS } from '../../src/render/buildings/types';
 import { buildZoned, schedFor } from '../../src/render/buildings/zoned';
 import { mergeDetail, mergeLod, type MergeItem, type LodItem } from '../../src/render/buildings/zoned/merge';
 import { buildGlowMesh, updateGlow, type WorldLight } from '../../src/render/buildings/zoned/glow';
@@ -102,12 +113,42 @@ if (q.get('test') === '2') {
   throw new Error('test done');
 }
 
+// ?test=3 → compile + draw every per-key material (getMaterial / getAnimMaterial),
+// the LOD, ghost and chunk materials: shader errors surface as console errors
+if (q.get('test') === '3') {
+  const cv = document.getElementById('c') as HTMLCanvasElement;
+  const r = new THREE.WebGLRenderer({ canvas: cv });
+  r.setSize(320, 200, false);
+  const sc = new THREE.Scene();
+  sc.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1));
+  const cam = new THREE.PerspectiveCamera(50, 1.6, 0.1, 500);
+  cam.position.set(0, 20, 60);
+  cam.lookAt(0, 0, 0);
+  const mb = new ModelBuilder().box('plain', 0, 0, 0, 2, 2, 2, 0xffffff);
+  const geo = mb.build()[0].geometry;
+  let i = 0;
+  const mats: THREE.Material[] = [];
+  for (const k of MAT_KEYS) mats.push(getMaterial(k), getAnimMaterial(k));
+  mats.push(getLodMaterial(), getChunkMaterial(), getChunkMaterial(true), ghostMaterial(true), ghostMaterial(false), ghostDepthMaterial());
+  for (const m of mats) {
+    const mesh = new THREE.Mesh(geo, m);
+    mesh.position.set((i % 12) * 4 - 22, 0, Math.floor(i / 12) * 4 - 10);
+    sc.add(mesh);
+    i++;
+  }
+  updateMaterials(0.7, 3, 21, 3);
+  r.render(sc, cam);
+  const gl = r.getContext();
+  (window as unknown as { __report: unknown }).__report = { materials: mats.length, programs: r.info.programs?.length ?? 0, glError: gl.getError() };
+  throw new Error('test done');
+}
+
 const canvas = document.getElementById('c') as HTMLCanvasElement;
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(1);
 renderer.setSize(innerWidth, innerHeight, false);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.0;
+renderer.toneMappingExposure = 1.0; // adapted below once the hour is known
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 const scene = new THREE.Scene();
@@ -118,6 +159,7 @@ const sunAng = ((hour - 6) / 12) * Math.PI;
 const sunDir = new THREE.Vector3(Math.cos(sunAng) * 0.8, Math.sin(sunAng), 0.45).normalize();
 const day = THREE.MathUtils.clamp(Math.sin(sunAng) * 1.6 + 0.15, 0, 1);
 const night = 1 - THREE.MathUtils.smoothstep(Math.sin(sunAng), -0.12, 0.18);
+renderer.toneMappingExposure = 1 + 3 * night; // SkySystem eye adaptation (≈×4 at night)
 const dusk = Math.max(0, 1 - Math.abs(Math.sin(sunAng) - 0.1) * 4) * (1 - night * 0.6);
 const skyTop = new THREE.Color().setRGB(0.02 + 0.3 * day, 0.03 + 0.45 * day, 0.07 + 0.75 * day);
 const skyHor = new THREE.Color().setRGB(0.04 + 0.7 * day + 0.5 * dusk, 0.05 + 0.72 * day + 0.2 * dusk, 0.1 + 0.78 * day);
@@ -135,7 +177,7 @@ scene.fog = new THREE.Fog(skyHor.getHex(), 900, 4200);
   envScene.add(new THREE.Mesh(new THREE.SphereGeometry(100, 32, 16), skyMat));
   const pm = new THREE.PMREMGenerator(renderer);
   scene.environment = pm.fromScene(envScene, 0.02).texture;
-  scene.environmentIntensity = 0.85;
+  scene.environmentIntensity = 0.85 * (1 - 0.8 * night);
 }
 const sun = new THREE.DirectionalLight(new THREE.Color(1, 0.93 - dusk * 0.25, 0.84 - dusk * 0.4), 3.2 * day + 0.05);
 sun.position.copy(sunDir).multiplyScalar(800);
@@ -144,10 +186,10 @@ sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.bias = -0.0004;
 sun.shadow.normalBias = 0.6;
 scene.add(sun, sun.target);
-const hemi = new THREE.HemisphereLight(skyTop.clone().lerp(new THREE.Color(0.6, 0.7, 0.9), 0.5), new THREE.Color(0.25, 0.23, 0.2), 0.55 + 0.9 * day);
+const hemi = new THREE.HemisphereLight(skyTop.clone().lerp(new THREE.Color(0.6, 0.7, 0.9), 0.5), new THREE.Color(0.25, 0.23, 0.2), 0.08 + 1.2 * day);
 scene.add(hemi);
 if (night > 0.5) {
-  const moon = new THREE.DirectionalLight(0x8fa6d8, 0.25);
+  const moon = new THREE.DirectionalLight(0x8fa6d8, 0.1);
   moon.position.set(-300, 500, 200);
   scene.add(moon);
 }

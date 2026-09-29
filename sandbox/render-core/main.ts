@@ -148,7 +148,9 @@ async function main(): Promise<void> {
   if (qs.get('city') === '1') buildCity(world);
   game.world = world;
   world.flushChanges();
+  const tl = performance.now();
   gr.onWorldLoaded(world);
+  console.warn(`[sandbox] onWorldLoaded ${(performance.now() - tl).toFixed(0)} ms`);
   events.emit('world:loaded', world);
   const cam = qs.has('cam') ? qs.get('cam')!.split(',').map(Number) : [];
   const cx = Number.isFinite(cam[0]) ? cam[0] : world.home.x, cy = Number.isFinite(cam[1]) ? cam[1] : world.home.y;
@@ -168,7 +170,12 @@ async function main(): Promise<void> {
     last = now;
     if (anim) world.time.hour = (world.time.hour + anim * dt) % 24;
     world.flushChanges();
+    const tu = performance.now();
     gr.update(frames < 3 ? 1 : dt);
+    const updMs = performance.now() - tu;
+    if (frames < 2) console.warn(`[sandbox] update #${frames} ${updMs.toFixed(0)} ms`);
+    const w2 = window as unknown as { __upd: number };
+    w2.__upd = frames < 5 ? updMs : (w2.__upd ?? updMs) * 0.9 + updMs * 0.1;
     gr.render();
     frames++;
     if (frames % 10 === 0 || frames < 5) {

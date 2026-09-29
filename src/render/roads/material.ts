@@ -15,6 +15,7 @@
 // uniforms.
 import * as THREE from 'three';
 import { DETAIL_TILE, MACRO_TILE, roadTextures } from './textures';
+import { ROAD_SCALE } from './geo';
 
 export interface RoadUniforms {
   uDetail: { value: THREE.Texture };
@@ -255,11 +256,11 @@ const SURFACE = /* glsl */ `
     bool center = !rJunc && rStyle > 5.5 && rStyle < 6.5 && as < 2.2;
     vec4 d2 = center ? texture2D(uDetail, rUV.yx / ${DETAIL_TILE.toFixed(1)} + 0.37) : rD;
     float pv = d2.b;
-    vec3 tint = center ? vec3(0.33, 0.21, 0.15) : vec3(0.27, 0.26, 0.245);
+    vec3 tint = center ? vec3(0.25, 0.15, 0.1) : vec3(0.2, 0.192, 0.18);
     rCol = tint * (0.55 + 0.9 * pv) * (0.9 + 0.2 * rM.r);
     if (!rJunc && rStyle > 5.5 && rStyle < 6.5) {
       float strip = rRange(as, 2.2, 2.48);
-      rCol = mix(rCol, vec3(0.42, 0.41, 0.39) * (0.85 + 0.3 * rD.a), strip);
+      rCol = mix(rCol, vec3(0.34, 0.33, 0.31) * (0.85 + 0.3 * rD.a), strip);
       pv = mix(pv, 0.7, strip);
     }
     rRough = 0.78;
@@ -433,7 +434,7 @@ export function createRoadMaterial(): { material: THREE.MeshStandardMaterial; un
       .replace('#include <common>', '#include <common>\nattribute vec4 aRoad;\nvarying vec4 vRoad;\nvarying vec3 vRWPos;\nvarying vec3 vRWNormal;')
       .replace(
         '#include <begin_vertex>',
-        '#include <begin_vertex>\nvRoad = aRoad;\nvRWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvRWNormal = normalize(mat3(modelMatrix) * objectNormal);',
+        '#include <begin_vertex>\nvRoad = vec4(aRoad.xyz * ' + (1 / ROAD_SCALE).toFixed(10) + ', aRoad.w);\nvRWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvRWNormal = normalize(mat3(modelMatrix) * objectNormal);',
       );
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', '#include <common>\n' + PARS)

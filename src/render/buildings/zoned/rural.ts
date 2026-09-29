@@ -138,10 +138,10 @@ function greenhouse(f: Fab, cx: number, cz: number, w: number, d: number): void 
 function orchard(f: Fab, cx: number, cz: number, w: number, d: number, olive: boolean): void {
   const rng = f.rng;
   pad(f, 'grass', cx, cz, w, d, olive ? '#a8a060' : '#6f9a48', 0.05);
-  const sp = olive ? 5.5 : 4.5;
+  const sp = olive ? 7 : 6;
   const nx = Math.max(1, Math.floor(w / sp)), nz = Math.max(1, Math.floor(d / sp));
   for (let i = 0; i < nx; i++)
-    for (let j = 0; j < nz; j++) tree(f, cx - w / 2 + (i + 0.5) * (w / nx), cz - d / 2 + (j + 0.5) * (d / nz), rng.range(3.2, 4.5), 'round', olive ? '#7a8a5a' : rng.chance(0.3) ? '#6f9a3a' : '#4f7d37');
+    for (let j = 0; j < nz; j++) tree(f, cx - w / 2 + (i + 0.5) * (w / nx), cz - d / 2 + (j + 0.5) * (d / nz), rng.range(3.6, 5), 'round', olive ? '#7a8a5a' : rng.chance(0.3) ? '#6f9a3a' : '#4f7d37');
 }
 
 function vineyard(f: Fab, cx: number, cz: number, w: number, d: number): void {

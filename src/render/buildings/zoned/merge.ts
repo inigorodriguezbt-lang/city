@@ -292,6 +292,10 @@ export function mergeLod(items: LodItem[]): THREE.BufferGeometry | null {
         _p.set(m.cx + lx * c + lz * s, 0, m.cz - lx * s + lz * c).applyMatrix4(it.matrix);
         corners[k] = [_p.x, _p.z];
       }
+      if (m.ridge) {
+        o = writeRidge(L, o, m, it.matrix, i0, i1, i2, i3);
+        continue;
+      }
       const ground = m.y0 <= 0.2;
       const y0w = e[13] + (ground ? -2 : m.y0);
       const y1w = e[13] + m.y0 + m.h;
@@ -319,6 +323,66 @@ export function mergeLod(items: LodItem[]): THREE.BufferGeometry | null {
     }
   }
   return toGeometry(L);
+}
+
+const _r = new THREE.Vector3();
+const _ra = new THREE.Vector3();
+const _rb = new THREE.Vector3();
+const _rn = new THREE.Vector3();
+
+/** Roof prism of a LOD mass (gable / hip, ridge along local X): two slopes +
+ *  two ends (gable walls or hip triangles), padded with degenerate triangles to
+ *  the fixed LOD_VERTS_PER_MASS stride so per-building vertex ranges stay simple. */
+function writeRidge(L: Layout, o: number, m: LodMass, mtx: THREE.Matrix4, i0: number, i1: number, i2: number, i3: number): number {
+  const c = Math.cos(m.rot), s = Math.sin(m.rot);
+  const hw = m.w / 2, hd = m.d / 2;
+  const inset = m.ridge === 2 ? Math.min(hw, hd) : 0;
+  const P = (lx: number, ly: number, lz: number): [number, number, number] => {
+    _r.set(m.cx + lx * c + lz * s, ly, m.cz - lx * s + lz * c).applyMatrix4(mtx);
+    return [_r.x, _r.y, _r.z];
+  };
+  const y0 = m.y0, y1 = m.y0 + m.h;
+  const FL = P(-hw, y0, hd), FR = P(hw, y0, hd), BR = P(hw, y0, -hd), BL = P(-hw, y0, -hd);
+  const RL = P(-hw + inset, y1, 0), RR = P(hw - inset, y1, 0);
+  const start = o;
+  const endCol = m.ridge === 2 ? m.roof : m.wall;
+  o = writeTri(L, o, FL, FR, RR, m.roof, i0, i1, i2, i3);
+  o = writeTri(L, o, FL, RR, RL, m.roof, i0, i1, i2, i3);
+  o = writeTri(L, o, BR, BL, RL, m.roof, i0, i1, i2, i3);
+  o = writeTri(L, o, BR, RL, RR, m.roof, i0, i1, i2, i3);
+  o = writeTri(L, o, BL, FL, RL, endCol, i0, i1, i2, i3);
+  o = writeTri(L, o, FR, BR, RR, endCol, i0, i1, i2, i3);
+  // pad: zero-area triangles at the ridge
+  while (o < start + LOD_VERTS_PER_MASS) o = writeTri(L, o, RL, RL, RL, m.roof, i0, i1, i2, i3);
+  return o;
+}
+
+/** Write one flat-shaded triangle (normal from its winding, forced to face up/outward). */
+function writeTri(L: Layout, o: number, a: [number, number, number], b: [number, number, number], c: [number, number, number], col: [number, number, number], i0: number, i1: number, i2: number, i3: number): number {
+  _ra.set(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+  _rb.set(c[0] - a[0], c[1] - a[1], c[2] - a[2]);
+  _rn.crossVectors(_ra, _rb);
+  const len = _rn.length();
+  let flip = false;
+  if (len > 1e-9) {
+    _rn.divideScalar(len);
+    if (_rn.y < -1e-3) { _rn.negate(); flip = true; }
+  } else _rn.set(0, 1, 0);
+  const r = clampU16(col[0]), g = clampU16(col[1]), bl = clampU16(col[2]);
+  const n0 = Math.round(_rn.x * 127), n1 = Math.round(_rn.y * 127), n2 = Math.round(_rn.z * 127);
+  const vs = flip ? [a, c, b] : [a, b, c];
+  for (const v of vs) {
+    const d3 = o * 3, d4 = o * 4;
+    L.pos[d3] = v[0]; L.pos[d3 + 1] = v[1]; L.pos[d3 + 2] = v[2];
+    L.nrm[d3] = n0; L.nrm[d3 + 1] = n1; L.nrm[d3 + 2] = n2;
+    L.uv[o * 2] = v[0]; L.uv[o * 2 + 1] = v[1];
+    L.col[d3] = r; L.col[d3 + 1] = g; L.col[d3 + 2] = bl;
+    L.fac[d4] = 0; L.fac[d4 + 1] = 0; L.fac[d4 + 2] = 0; L.fac[d4 + 3] = 0;
+    L.inf[d4] = i0; L.inf[d4 + 1] = i1; L.inf[d4 + 2] = i2; L.inf[d4 + 3] = i3;
+    L.mat[o] = LOD_MAT_ID;
+    o++;
+  }
+  return o;
 }
 
 /** Write a quad (4 verts: x,y,z,u,v) as 2 triangles with a fixed normal; winding made to face the normal. */

@@ -10,6 +10,11 @@
 //  Other renderers: lift decals (roads, zones) by ROAD_LIFT and use
 //  polygonOffset (factor -1..-2, units -1..-4); never write gl_FragDepth;
 //  include three's fog chunks (`fog: true`) so aerial perspective matches.
+//
+// Terrain surface: the drawn terrain equals world.heights everywhere except
+// free shoreline vertices (no road / zone / building on the adjacent cells),
+// which are smoothed so banks do not show the cell staircase. Anything placed
+// on free banks should use groundHeight(); lots and roads keep true heights.
 import * as THREE from 'three';
 import type { Game } from '../game/Game';
 import type { World } from '../world/World';
@@ -437,6 +442,12 @@ export class GameRenderer {
 
   getViewInfo(): ViewInfo {
     return this.viewInfo;
+  }
+
+  /** rendered terrain height (m) at world meters (see header: smoothed free shorelines) */
+  groundHeight(wx: number, wz: number): number {
+    if (this.terrain) return this.terrain.data.heightAt(wx, wz);
+    return this.world ? this.world.heightAt(wx, wz) : 0;
   }
 
   setOverlay(field: FieldId | null): void {
