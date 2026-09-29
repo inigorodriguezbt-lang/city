@@ -1,0 +1,28 @@
+{
+  "name": "urbis",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "URBIS — a realistic browser city builder (Three.js + Web Workers)",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:single": "vite build --mode single",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/inigorodriguezbt-lang/city.git"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.186.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.1",
+    "vite-plugin-singlefile": "^2.3.3"
+  }
+}

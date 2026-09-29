@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>URBIS — City Builder</title>
+    <meta name="description" content="URBIS — a realistic city builder that runs in your browser." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #0b1017; }
+      #boot { position: fixed; inset: 0; display: grid; place-items: center; color: #cfe3ff; font: 600 14px/1.4 system-ui, sans-serif; letter-spacing: .3em; z-index: 1000; background: radial-gradient(1200px 600px at 50% 60%, #1b2a3d, #0b1017); }
+      #boot b { display: block; font: 800 44px/1 system-ui, sans-serif; letter-spacing: .35em; margin-bottom: 14px; color: #fff; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="viewport"></div>
+      <div id="ui"></div>
+    </div>
+    <div id="boot"><div><b>URBIS</b>LOADING</div></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

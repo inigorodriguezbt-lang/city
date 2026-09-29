@@ -1,0 +1,144 @@
+/* URBIS base theme — shared tokens + primitives. Module CSS (hud.css, menus.css)
+   extends these; do not redefine the tokens elsewhere. */
+:root {
+  --ui-scale: 1;
+  --font: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-display: 'Outfit', 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+
+  --bg-0: #0b1017;
+  --glass: rgba(16, 22, 32, 0.78);
+  --glass-strong: rgba(12, 17, 25, 0.92);
+  --glass-light: rgba(255, 255, 255, 0.06);
+  --stroke: rgba(255, 255, 255, 0.09);
+  --stroke-strong: rgba(255, 255, 255, 0.18);
+  --text: #e8eef7;
+  --text-dim: #9aa8bb;
+  --text-faint: #66758a;
+  --accent: #4cc2ff;
+  --accent-2: #7c5cff;
+  --good: #3ddc84;
+  --warn: #ffb547;
+  --bad: #ff5d5d;
+  --money: #7ee787;
+  --res: #3ddc84;
+  --com: #4aa8ff;
+  --ind: #f2c230;
+  --off: #29d3e6;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --blur: blur(14px) saturate(140%);
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-0);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+#app { position: fixed; inset: 0; }
+#viewport { position: absolute; inset: 0; }
+#viewport canvas { display: block; width: 100%; height: 100%; outline: none; }
+
+/* UI root: children are positioned absolutely; the root itself lets clicks
+   through to the canvas except on actual UI elements (pointer-events: auto). */
+#ui {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  zoom: var(--ui-scale);
+  z-index: 10;
+}
+#ui > * { pointer-events: auto; }
+#ui .passthrough { pointer-events: none; }
+#ui .passthrough > * { pointer-events: auto; }
+
+/* ── primitives ─────────────────────────────────────────────────────────── */
+.glass {
+  background: var(--glass);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--stroke-strong);
+  background: var(--glass-light);
+  color: var(--text);
+  font: 600 13px/1 var(--font);
+  cursor: pointer;
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease), transform 0.1s var(--ease);
+}
+.btn:hover { background: rgba(255, 255, 255, 0.12); border-color: rgba(255, 255, 255, 0.28); }
+.btn:active { transform: translateY(1px); }
+.btn.primary { background: linear-gradient(180deg, #53c8ff, #2c9be0); border-color: #6fd3ff; color: #04121d; }
+.btn.primary:hover { background: linear-gradient(180deg, #6fd3ff, #36a9ee); }
+.btn.danger { background: rgba(255, 93, 93, 0.16); border-color: rgba(255, 93, 93, 0.5); color: #ffd6d6; }
+.btn:disabled, .btn.disabled { opacity: 0.45; pointer-events: none; }
+
+.icon-btn {
+  width: 40px;
+  height: 40px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  font-size: 18px;
+  cursor: pointer;
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+.icon-btn:hover { background: rgba(255, 255, 255, 0.1); }
+.icon-btn.active { background: rgba(76, 194, 255, 0.18); border-color: rgba(76, 194, 255, 0.55); }
+
+.h-display { font-family: var(--font-display); font-weight: 700; letter-spacing: 0.02em; }
+.dim { color: var(--text-dim); }
+.faint { color: var(--text-faint); }
+.mono { font-family: var(--font-mono); }
+.good { color: var(--good); }
+.warn { color: var(--warn); }
+.bad { color: var(--bad); }
+
+input, select, textarea, button { font-family: var(--font); }
+input[type='text'], input[type='number'], input[type='search'], select, textarea {
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  border: 1px solid var(--stroke-strong);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+input[type='range'] { accent-color: var(--accent); }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.16); border-radius: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition-duration: 0s !important; animation-duration: 0s !important; }
+}
