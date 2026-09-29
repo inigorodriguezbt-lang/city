@@ -91,6 +91,22 @@ const errors = [];
     log('grow', JSON.stringify(s));
   }
 
+  const diag = await ev(() => {
+    const g = window.__game, w = g.world;
+    const P = ['NoPower','NoWater','NoSewage','NoRoad','Garbage','Crime','Sick','Fire','NoWorkers','NoCustomers','NoGoods','Pollution','Noise','Abandoned','Dead','NoEducated','HighRent','Flooded','Traffic','LowHappiness'];
+    const hist = {}; let zoned = 0, lv = [0,0,0,0,0,0], full = 0, cap = 0, res = 0, abandoned = 0;
+    for (const b of w.buildings.values()) {
+      for (let i = 0; i < P.length; i++) if (b.problems & (1 << i)) hist[P[i]] = (hist[P[i]] || 0) + 1;
+      if (b.kind === 'zoned') { zoned++; lv[b.level]++; cap += b.maxResidents; res += b.residents; if (b.flags & 32) abandoned++; }
+    }
+    let emptyZoned = 0;
+    for (let i = 0; i < w.zone.length; i++) if (w.zone[i] && !w.bldg[i]) emptyZoned++;
+    const s = w.stats;
+    return { hist, zoned, levels: lv, residents: res, capacity: cap, abandoned, emptyZoned, power: s.power, water: s.water, sewage: s.sewage, garbage: s.garbage, health: s.health_, edu: s.education_, dead: s.deathcare, factors: g.sim.demandFactors?.() };
+  });
+  log('diag', JSON.stringify(diag));
+
+  await ev(() => { try { window.__game.eventSystem.setWeather('clear', 0, 30); } catch (e) {} });
   const views = [
     ['golden', 18.3, 260, 0.9, 0.42],
     ['noon', 12.5, 420, 2.4, 0.62],
@@ -107,7 +123,14 @@ const errors = [];
       g.renderer.snapTransitions?.();
       g.renderer.cameraCtl.setPose(c.x, c.y, dist, yaw, pitch);
     }, { hour, dist, yaw, pitch, c: plan.center });
-    await page.waitForTimeout(15000);
+    // wait until every detailed building chunk near the camera is built
+    const t0 = Date.now();
+    while (Date.now() - t0 < 240000) {
+      await page.waitForTimeout(4000);
+      const st = await ev(() => { const b = window.__game.buildings; return { pend: (b.pendingDetail || []).length, refine: b.stats().pending }; });
+      if (st.pend === 0 && Date.now() - t0 > 8000) break;
+    }
+    log(name, 'ready after', Math.round((Date.now() - t0) / 1000), 's');
     await shot(name);
   }
   await ev(() => window.__game.ui.setHudVisible(true));

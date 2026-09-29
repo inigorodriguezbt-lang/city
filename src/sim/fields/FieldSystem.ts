@@ -22,7 +22,7 @@ import type { World } from '../../world/World';
 import { Layer, type Building, type FieldId } from '../../core/types';
 import { WorkerRPC } from '../../core/rpc';
 import FieldsWorker from '../../workers/fields.worker?worker&inline';
-import type { FieldEngine } from './engine';
+import { FieldEngine } from './engine';
 import { BufferPool, BuildingPacker, packStops, packTerrain, weatherPacket, type UtilityMods } from './pack';
 import { OUTPUT_FIELDS, type FieldJob, type FieldResult } from './protocol';
 
@@ -75,6 +75,7 @@ export class FieldSystem {
   /** world session; results of older sessions are discarded */
   private token = 0;
   private inFlight: Promise<boolean> | null = null;
+  private syncEngine: FieldEngine | null = null;
   /** performance.now() at which a requested recompute becomes due */
   private dueAt = Number.POSITIVE_INFINITY;
   private lastJobDay = 0;
@@ -167,6 +168,33 @@ export class FieldSystem {
     throw new Error('field recompute failed');
   }
 
+  /**
+   * Compute and apply every field synchronously on the main thread. Used by
+   * fast-forwards (Simulation.advanceDays) so utilities and coverage keep up
+   * with weeks of simulated time that pass without rendered frames.
+   */
+  computeSync(): boolean {
+    const w = this.world;
+    if (!w) return false;
+    const t0 = performance.now();
+    if (!this.syncEngine) this.syncEngine = new FieldEngine();
+    // the main-thread engine keeps its own terrain cache: always send terrain + trees
+    this.terrainDirty = true;
+    this.treesDirty = true;
+    let job: FieldJob;
+    try {
+      job = this.buildJob(w, false);
+    } catch (err) {
+      console.error('[fields] packing failed', err);
+      return false;
+    }
+    const result = this.syncEngine.run(job);
+    // …and the worker engine must receive them again on its next job
+    this.terrainDirty = true;
+    this.treesDirty = true;
+    return this.apply(w, result, t0);
+  }
+
   /** true while a job is being computed */
   get busy(): boolean {
     return this.inFlight !== null;
@@ -239,10 +267,7 @@ export class FieldSystem {
         return this.rpc.call<FieldResult>('compute', job, transferList(job));
       }
     }
-    if (!this.engine) {
-      const { FieldEngine } = await import('./engine');
-      this.engine = new FieldEngine();
-    }
+    if (!this.engine) this.engine = new FieldEngine();
     this.timings.mode = 'main';
     return this.engine.run(job);
   }

@@ -245,9 +245,19 @@ export class Simulation {
     const startTick = clock.lastTick;
     let mode: 'undecided' | 'detail' | 'coarse' = 'undecided';
     let K = 1;
+    // utilities/coverage are normally recomputed between frames; a fast-forward
+    // has no frames, so refresh them synchronously every few simulated days
+    const fields = this.game.fields as { computeSync?: () => boolean };
+    const syncEvery = w.size <= 256 ? 3 : w.size <= 384 ? 5 : w.size <= 512 ? 8 : 12;
+    let lastSync = w.time.day;
+    fields.computeSync?.();
     ctx.fastForward = true;
     try {
       while (clock.lastTick < targetTick) {
+        if (w.time.day - lastSync >= syncEvery) {
+          lastSync = w.time.day;
+          fields.computeSync?.();
+        }
         const elapsed = performance.now() - t0;
         if (elapsed > FF_HARD_MS) break;
         const next = clock.lastTick + 1;
@@ -280,6 +290,7 @@ export class Simulation {
       clock.lastTick = targetTick;
     }
     w.time.day = Math.max(w.time.day, targetTick / TICKS_PER_DAY);
+    fields.computeSync?.();
   }
 
   /** set visual time of day (0..24) */
