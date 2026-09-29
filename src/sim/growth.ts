@@ -4,7 +4,7 @@
 // from ZoneDef.lots that fit same-zone, empty, dry, gentle cells with their
 // whole front on an access road. Occasionally, when land is scarce and demand
 // high, small low-level buildings are merged into a larger lot.
-import { MAX_LOT_SLOPE, TICKS_PER_DAY } from '../core/constants';
+import { MAX_LOT_SLOPE, MAX_ZONE_DEPTH, TICKS_PER_DAY } from '../core/constants';
 import { BFlag, DIR_DX, DIR_DY, Dir, RoadType, ZoneType, type Building, type ZoneCategory } from '../core/types';
 import { hash3 } from '../core/rng';
 import { zoneDef } from '../data/zones';
@@ -34,6 +34,9 @@ export function dailySpawnBudget(ctx: SimContext, cat: ZoneCategory): number {
   // gentle ramp: weak demand grows slowly, strong demand grows fast
   return scale * d * (0.4 + 0.6 * d);
 }
+
+/** infill lot sizes [frontage, depth] tried after a zone's own lot list */
+const FALLBACK_LOTS: [number, number][] = [[2, 2], [1, 2], [2, 1], [1, 1]];
 
 export class Growth {
   constructor(private ctx: SimContext) {}
@@ -108,8 +111,41 @@ export class Growth {
       cs.markUnfit(bestI, UNFIT_RETRY_DAYS);
       return 0;
     }
+    this.absorbBackRows(lot, z);
     const b = this.spawn(lot, z, 1, 0);
     return b ? Math.max(1, b.maxResidents + b.jobs) : 0;
+  }
+
+  /**
+   * Extend a lot backwards over same-zone cells that no road can ever reach
+   * (they touch no access road), so deep zoned blocks fill completely instead
+   * of leaving orphaned back rows empty. Stops at MAX_ZONE_DEPTH.
+   */
+  private absorbBackRows(l: Lot, z: ZoneType): void {
+    const w = this.ctx.world, s = w.size;
+    const alongX = l.rot === Dir.N || l.rot === Dir.S;
+    const depth = () => (alongX ? l.h : l.w);
+    const free = (xx: number, yy: number): boolean => {
+      if (xx < 0 || yy < 0 || xx >= s || yy >= s) return false;
+      const i = yy * s + xx;
+      if (w.zone[i] !== z || w.road[i] || w.bldg[i]) return false;
+      if (w.isWater(xx, yy) || w.cellSlope(xx, yy) > MAX_LOT_SLOPE) return false;
+      // a cell with its own road access can host its own building later
+      for (let d = 0; d < 4; d++) if (isAccessRoad(w.roadAt(xx + DIR_DX[d], yy + DIR_DY[d]))) return false;
+      return true;
+    };
+    while (depth() < MAX_ZONE_DEPTH) {
+      const cells: [number, number][] = [];
+      if (l.rot === Dir.N) for (let k = 0; k < l.w; k++) cells.push([l.x + k, l.y + l.h]);
+      else if (l.rot === Dir.S) for (let k = 0; k < l.w; k++) cells.push([l.x + k, l.y - 1]);
+      else if (l.rot === Dir.W) for (let k = 0; k < l.h; k++) cells.push([l.x + l.w, l.y + k]);
+      else for (let k = 0; k < l.h; k++) cells.push([l.x - 1, l.y + k]);
+      if (!cells.every(([xx, yy]) => free(xx, yy))) return;
+      if (l.rot === Dir.N) l.h++;
+      else if (l.rot === Dir.S) { l.y--; l.h++; }
+      else if (l.rot === Dir.W) l.w++;
+      else { l.x--; l.w++; }
+    }
   }
 
   /** true if a road cell next to (x,y) connects to an outside connection */
@@ -195,7 +231,10 @@ export class Growth {
     lots.sort((a, b) => b.wgt - a.wgt);
     const d0 = dirs[Math.floor(rng.next() * dirs.length)];
     const dirOrder = [d0, ...dirs.filter((d) => d !== d0)];
-    for (const l of lots) {
+    // standard lots first; small infill lots only for leftover slivers
+    // (single cells, one-deep strips between a road and existing buildings)
+    const fallback = FALLBACK_LOTS.filter(([f, d]) => !zd.lots.some((l) => l[0] === f && l[1] === d)).map(([f, d]) => ({ f, d, wgt: 0 }));
+    for (const l of [...lots, ...fallback]) {
       for (const d of dirOrder) {
         const start = Math.floor(rng.next() * l.f);
         for (let t = 0; t < l.f; t++) {

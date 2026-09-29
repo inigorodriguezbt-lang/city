@@ -118,11 +118,33 @@ const errors = [];
     let emptyZoned = 0;
     for (let i = 0; i < w.zone.length; i++) if (w.zone[i] && !w.bldg[i]) emptyZoned++;
     const s = w.stats;
-    return { hist, zoned, levels: lv, residents: res, capacity: cap, abandoned, emptyZoned, power: s.power, water: s.water, sewage: s.sewage, garbage: s.garbage, health: s.health_, edu: s.education_, dead: s.deathcare, factors: g.sim.demandFactors?.() };
+    const byZone = {}; let withRoad = 0;
+    const acc = (t) => t && t !== 5 && t !== 7;
+    for (let y = 0; y < w.size; y++) for (let x = 0; x < w.size; x++) {
+      const i = y * w.size + x;
+      if (!w.zone[i] || w.bldg[i]) continue;
+      byZone[w.zone[i]] = (byZone[w.zone[i]] || 0) + 1;
+      if (acc(w.roadAt(x + 1, y)) || acc(w.roadAt(x - 1, y)) || acc(w.roadAt(x, y + 1)) || acc(w.roadAt(x, y - 1))) withRoad++;
+    }
+    const cs = g.sim.ctx && g.sim.ctx.candidates;
+    const probe = [];
+    const gr = g.sim.growth;
+    for (let y = 0; y < w.size && probe.length < 14; y++) for (let x = 0; x < w.size && probe.length < 14; x++) {
+      const i = y * w.size + x;
+      if (!w.zone[i] || w.bldg[i]) continue;
+      if (!(acc(w.roadAt(x + 1, y)) || acc(w.roadAt(x - 1, y)) || acc(w.roadAt(x, y + 1)) || acc(w.roadAt(x, y - 1)))) continue;
+      let lot = null; try { lot = gr.findLot(x, y, w.zone[i]); } catch (e) { lot = 'ERR ' + e.message; }
+      const nb = []; for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) nb.push((w.zone[w.idx(x+dx,y+dy)]||0) + '/' + (w.road[w.idx(x+dx,y+dy)]||0) + '/' + (w.bldg[w.idx(x+dx,y+dy)]?1:0));
+      probe.push({ x, y, z: w.zone[i], unfit: cs.unfit[i], today: Math.floor(w.time.day), elig: cs.eligible(x, y, i), slope: +w.cellSlope(x, y).toFixed(2), lot, nb: nb.join(' ') });
+    }
+    const cand = cs ? [0, 1, 2, 3].map((c) => cs.count(c)) : null;
+    const acc2 = g.sim.ctx && g.sim.ctx.state && g.sim.ctx.state.spawnAcc;
+    return { probe, byZone, withRoad, cand, spawnAcc: acc2, hist, zoned, levels: lv, residents: res, capacity: cap, abandoned, emptyZoned, power: s.power, water: s.water, sewage: s.sewage, garbage: s.garbage, health: s.health_, edu: s.education_, dead: s.deathcare, factors: g.sim.demandFactors?.() };
   });
   log('diag', JSON.stringify(diag));
 
   await ev(() => { try { window.__game.eventSystem.setWeather('clear', 0, 30); } catch (e) {} });
+  if (args.includes('--noshots')) { log('errors', errors.length); for (const e of errors.slice(0, 30)) console.log('  ', e.slice(0, 400)); await browser.close(); return; }
   const views = [
     ['golden', 18.3, 260, 0.9, 0.42],
     ['noon', 12.5, 420, 2.4, 0.62],
