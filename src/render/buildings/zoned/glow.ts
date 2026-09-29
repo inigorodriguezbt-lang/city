@@ -11,7 +11,8 @@ export interface WorldLight extends ModelLight {
 
 const KIND: Record<ModelLight['kind'], number> = { lamp: 0, beacon: 1, neon: 2, flood: 3 };
 
-const uniforms = {
+const uniforms: Record<string, THREE.IUniform> = {
+  ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
   uNight: { value: 0 },
   uTime: { value: 0 },
   uViewH: { value: 800 },
@@ -28,6 +29,7 @@ varying vec3 vCol;
 varying vec2 vUv;
 varying float vA;
 #include <common>
+#include <fog_pars_vertex>
 #include <logdepthbuf_pars_vertex>
 void main() {
   float kind = iData.y;
@@ -38,7 +40,7 @@ void main() {
     a = mix(0.35, 1.0, night);
     if (iData.z >= 0.0) a *= step(0.62, fract(uTime * 0.75 + iData.z));
   }
-  else if (kind < 2.5) a = 0.25 + 0.75 * night;
+  else if (kind < 2.5) a = 0.06 + 0.94 * night;
   else a = night * 0.85;
   vA = a;
   vCol = iCol;
@@ -52,7 +54,9 @@ void main() {
   // pull slightly toward the camera so glows are not swallowed by their own fixture
   mv.xyz += normalize(-mv.xyz) * min(1.5, iData.x * 0.4);
   gl_Position = projectionMatrix * mv;
+  vec4 mvPosition = mv;
   #include <logdepthbuf_vertex>
+  #include <fog_vertex>
 }
 `;
 
@@ -61,6 +65,7 @@ varying vec3 vCol;
 varying vec2 vUv;
 varying float vA;
 #include <common>
+#include <fog_pars_fragment>
 #include <logdepthbuf_pars_fragment>
 void main() {
   #include <logdepthbuf_fragment>
@@ -69,7 +74,16 @@ void main() {
   float core = exp(-r2 * 18.0);
   float halo = exp(-r2 * 4.0) * 0.45;
   vec3 c = vCol * (halo + core * 1.6) + vec3(core * 0.6);
-  gl_FragColor = vec4(c * vA, 1.0);
+  float keep = 1.0;
+#ifdef USE_FOG
+  // additive glow: haze swallows it instead of tinting it
+  #ifdef FOG_EXP2
+  keep = exp(-fogDensity * fogDensity * vFogDepth * vFogDepth * 0.6);
+  #else
+  keep = 1.0 - smoothstep(fogNear, fogFar, vFogDepth) * 0.85;
+  #endif
+#endif
+  gl_FragColor = vec4(c * vA * keep, 1.0);
 }
 `;
 
@@ -86,6 +100,7 @@ export function glowMaterial(): THREE.ShaderMaterial {
       depthWrite: false,
       blending: THREE.AdditiveBlending,
       toneMapped: false,
+      fog: true,
     });
     material.name = 'bld:glow';
   }

@@ -150,26 +150,6 @@ export function toBytes(src: Float32Array, dst: Uint8Array): void {
   new Uint8ClampedArray(dst.buffer, dst.byteOffset, dst.length).set(src);
 }
 
-/** Growable Int32 stack/queue used by graph searches. */
-export class IntList {
-  data: Int32Array;
-  length = 0;
-  constructor(cap = 1024) {
-    this.data = new Int32Array(cap);
-  }
-  push(v: number): void {
-    if (this.length === this.data.length) {
-      const d = new Int32Array(this.data.length * 2);
-      d.set(this.data);
-      this.data = d;
-    }
-    this.data[this.length++] = v;
-  }
-  clear(): void {
-    this.length = 0;
-  }
-}
-
 /**
  * Dial's bucket queue for small positive integer edge costs: O(V + maxCost).
  * Entries are lazily invalidated (a node may be queued more than once; stale
@@ -225,4 +205,97 @@ export class BucketQueue {
   get highest(): number {
     return this.maxUsed;
   }
+}
+
+/**
+ * Advect a field downwind: dst = Σₖ wₖ · src(p − k·(dx, dy)) for k = 0..steps,
+ * with wₖ ∝ decayᵏ (normalised). Every tap uses the same fractional offset for
+ * the whole grid, so the bilinear weights are hoisted out of the cell loop.
+ * Edges clamp. Produces plumes that lean and stretch with the wind.
+ */
+export function driftSmear(src: Float32Array, dst: Float32Array, w: number, h: number, dx: number, dy: number, steps: number, decay: number): void {
+  let norm = 0;
+  for (let k = 0; k <= steps; k++) norm += Math.pow(decay, k);
+  dst.fill(0);
+  const lastX = w - 1, lastY = h - 1;
+  for (let k = 0; k <= steps; k++) {
+    const wk = Math.pow(decay, k) / norm;
+    // sample upwind: p − k·d
+    const ox = -dx * k, oy = -dy * k;
+    const ix = Math.floor(ox), iy = Math.floor(oy);
+    const fx = ox - ix, fy = oy - iy;
+    const w00 = (1 - fx) * (1 - fy) * wk, w10 = fx * (1 - fy) * wk, w01 = (1 - fx) * fy * wk, w11 = fx * fy * wk;
+    for (let y = 0; y < h; y++) {
+      let sy0 = y + iy, sy1 = sy0 + 1;
+      sy0 = sy0 < 0 ? 0 : sy0 > lastY ? lastY : sy0;
+      sy1 = sy1 < 0 ? 0 : sy1 > lastY ? lastY : sy1;
+      const r0 = sy0 * w, r1 = sy1 * w, o = y * w;
+      // interior span where both x taps are in range
+      const xa = Math.max(0, -ix), xb = Math.min(w, lastX - ix);
+      for (let x = 0; x < xa && x < w; x++) {
+        let sx0 = x + ix, sx1 = sx0 + 1;
+        sx0 = sx0 < 0 ? 0 : sx0 > lastX ? lastX : sx0;
+        sx1 = sx1 < 0 ? 0 : sx1 > lastX ? lastX : sx1;
+        dst[o + x] += src[r0 + sx0] * w00 + src[r0 + sx1] * w10 + src[r1 + sx0] * w01 + src[r1 + sx1] * w11;
+      }
+      for (let x = xa; x < xb; x++) {
+        const sx = x + ix;
+        dst[o + x] += src[r0 + sx] * w00 + src[r0 + sx + 1] * w10 + src[r1 + sx] * w01 + src[r1 + sx + 1] * w11;
+      }
+      for (let x = Math.max(xa, xb); x < w; x++) {
+        let sx0 = x + ix, sx1 = sx0 + 1;
+        sx0 = sx0 < 0 ? 0 : sx0 > lastX ? lastX : sx0;
+        sx1 = sx1 < 0 ? 0 : sx1 > lastX ? lastX : sx1;
+        dst[o + x] += src[r0 + sx0] * w00 + src[r0 + sx1] * w10 + src[r1 + sx0] * w01 + src[r1 + sx1] * w11;
+      }
+    }
+  }
+}
+
+/** Radial kernel shapes for additive stamps (take t² = (d / radius)²). */
+export enum KernelShape {
+  /** plateau then fade (service reach) */
+  Plateau = 0,
+  /** smooth bell (plumes, blight) */
+  Bell = 1,
+}
+
+/**
+ * Add `amount · kernel(d / radius)` to a float grid, with d measured from a
+ * footprint rectangle [x0, x1) × [y0, y1) (0 inside it). Amount may be negative.
+ */
+export function stampAdd(F: Float32Array, s: number, x0: number, y0: number, x1: number, y1: number, radius: number, amount: number, shape: KernelShape): void {
+  const R = radius;
+  if (R <= 0 || amount === 0) return;
+  const bx0 = Math.max(0, Math.floor(x0 - R)), by0 = Math.max(0, Math.floor(y0 - R));
+  const bx1 = Math.min(s - 1, Math.ceil(x1 + R)), by1 = Math.min(s - 1, Math.ceil(y1 + R));
+  const invR2 = 1 / (R * R);
+  for (let y = by0; y <= by1; y++) {
+    const cy = y + 0.5;
+    const dy = cy < y0 ? y0 - cy : cy > y1 ? cy - y1 : 0;
+    const dy2 = dy * dy * invR2;
+    if (dy2 >= 1) continue;
+    const row = y * s;
+    for (let x = bx0; x <= bx1; x++) {
+      const cx = x + 0.5;
+      const dx = cx < x0 ? x0 - cx : cx > x1 ? cx - x1 : 0;
+      const t2 = dx * dx * invR2 + dy2;
+      if (t2 >= 1) continue;
+      let k: number;
+      if (shape === KernelShape.Plateau) {
+        k = 1.2 * (1 - t2);
+        if (k > 1) k = 1;
+      } else {
+        const u = 1 - t2;
+        k = u * u;
+      }
+      F[row + x] += amount * k;
+    }
+  }
+}
+
+/** Frame-count aware exponential smoothing factor: 1 − (1 − α)^days. */
+export function smoothFactor(alphaPerDay: number, days: number): number {
+  if (days <= 0) return 0;
+  return 1 - Math.pow(1 - alphaPerDay, days);
 }

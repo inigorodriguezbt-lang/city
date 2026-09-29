@@ -12,6 +12,8 @@ import { World } from '../../src/world/World';
 import { defaultSettings } from '../../src/settings/types';
 import { themeDef } from '../../src/data/themes';
 import { BuildingRenderer } from '../../src/render/buildings/BuildingRenderer';
+import { BUILDINGS } from '../../src/data/buildings';
+import { registerServiceModels } from '../../src/render/buildings/service';
 import { makeStage } from './stage';
 
 const q = new URLSearchParams(location.search);
@@ -94,8 +96,26 @@ if (statesRow) {
     placed.push(b.id);
   });
 }
+// layout=services: rows of catalog service buildings (registry models) + one
+// unknown def to exercise the civic fallback. from/count pick a catalog slice.
+const servicesRow = q.get('layout') === 'services';
+if (servicesRow) {
+  registerServiceModels();
+  const from = Number(q.get('from') ?? 0), count = Number(q.get('count') ?? 24);
+  const defs = BUILDINGS.slice(from, from + count);
+  let x = 4, y = 4, rowH = 0;
+  const place = (defId: string, w: number, h: number) => {
+    if (x + w > size - 4) { x = 4; y += rowH + 2; rowH = 0; }
+    const b = world.addBuilding({ kind: 'service', defId, x, y, w, h, rot: Dir.S, zone: ZoneType.None, level: 1, style: (styleArg === 'mixed' ? 'european' : styleArg) as StyleId, seed: 777 + x * 31 + y, built: 1, flags: BFlag.Powered | BFlag.Watered });
+    placed.push(b.id);
+    x += w + 2;
+    rowH = Math.max(rowH, h);
+  };
+  for (const d of defs) place(d.id, d.w, d.h);
+  place('unknown:civic', 3, 3);
+}
 const blocks: [number, number][] = [];
-if (!statesRow) 
+if (!statesRow && !servicesRow) 
 for (let by = 2; by < size - BLOCK; by += BLOCK + 1) for (let bx = 2; bx < size - BLOCK; bx += BLOCK + 1) blocks.push([bx, by]);
 blocks.sort((a, b) => Math.hypot(a[0] + BLOCK / 2 - c0, a[1] + BLOCK / 2 - c0) - Math.hypot(b[0] + BLOCK / 2 - c0, b[1] + BLOCK / 2 - c0));
 for (const [bx, by] of blocks) {
@@ -149,6 +169,7 @@ const views: Record<string, [number, number, number, number, number, number]> = 
   far: [mid + 1200, 1400, mid + 2300, mid, 0, mid],
   street: [mid + 40, 14, mid + 150, mid - 40, 30, mid - 60],
   states: [mid, 140, mid + 300, mid, 4, mid - 24],
+  services: [size * CELL * 0.35, 420, size * CELL * 0.62, size * CELL * 0.35, 0, 160],
 };
 const v = views[camArg] ?? camArg.split(',').map(Number);
 camera.position.set(v[0], v[1], v[2]);

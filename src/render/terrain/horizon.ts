@@ -16,6 +16,11 @@ export class FarLand {
   private hPS: Float64Array;
   private amp: number;
   private ridged: boolean;
+  /** ring mesh grid (tensor axes + heights) from the last buildGeometry() */
+  private axis: number[] = [];
+  private grid: Float32Array | null = null;
+  /** bumped whenever the ring geometry is rebuilt (dependents re-sample) */
+  version = 0;
 
   constructor(readonly world: World) {
     this.S = world.size * CELL;
@@ -141,24 +146,61 @@ export class FarLand {
     return base * (1 - blend) + target * blend;
   }
 
-  /** Coarse height texture over [-extent, S+extent]^2 (R = height) for water depth. */
-  createHeightTexture(res = 128): { tex: THREE.DataTexture; origin: number; span: number } {
+  /**
+   * Height of the ring *mesh* at (x, z): the same piecewise-linear surface the
+   * GPU draws (quad split a-c-b / b-c-d), so water depth sampled from it matches
+   * the visible shoreline exactly. Falls back to height() before the first build.
+   */
+  meshHeight(x: number, z: number): number {
+    const g = this.grid, ax = this.axis;
+    if (!g || ax.length < 2) return this.height(x, z);
+    const n = ax.length;
+    const find = (v: number): number => {
+      let lo = 0, hi = n - 2;
+      if (v <= ax[0]) return 0;
+      if (v >= ax[n - 1]) return n - 2;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (ax[mid] <= v) lo = mid;
+        else hi = mid - 1;
+      }
+      return lo;
+    };
+    const i = find(x), j = find(z);
+    const u = Math.min(1, Math.max(0, (x - ax[i]) / (ax[i + 1] - ax[i])));
+    const v = Math.min(1, Math.max(0, (z - ax[j]) / (ax[j + 1] - ax[j])));
+    const a = g[j * n + i], b = g[j * n + i + 1], c = g[(j + 1) * n + i], d = g[(j + 1) * n + i + 1];
+    return u + v <= 1 ? a + (b - a) * u + (c - a) * v : d + (c - d) * (1 - u) + (b - d) * (1 - v);
+  }
+
+  /** Height texture over [-extent, S+extent]^2 (R = ring mesh height) for sea depth beyond the map. */
+  createHeightTexture(res = 640): { tex: THREE.DataTexture; origin: number; span: number } {
     const E = this.extent, S = this.S;
     const span = S + 2 * E;
-    const data = new Float32Array(res * res * 4);
-    for (let j = 0; j < res; j++)
-      for (let i = 0; i < res; i++) {
-        const x = -E + (i / (res - 1)) * span, z = -E + (j / (res - 1)) * span;
-        const o = (j * res + i) * 4;
-        data[o] = this.height(x, z);
-        data[o + 1] = data[o + 2] = 0;
-        data[o + 3] = 1;
-      }
-    const tex = new THREE.DataTexture(data, res, res, THREE.RGBAFormat, THREE.FloatType);
+    const data = new Float32Array(res * res);
+    this.fillHeightData(data, res);
+    const tex = new THREE.DataTexture(data, res, res, THREE.RedFormat, THREE.FloatType);
     tex.magFilter = tex.minFilter = THREE.NearestFilter;
     tex.generateMipmaps = false;
+    tex.colorSpace = THREE.NoColorSpace;
     tex.needsUpdate = true;
     return { tex, origin: -E, span };
+  }
+
+  /** re-sample the ring mesh into an existing height texture (after a ring rebuild) */
+  updateHeightTexture(tex: THREE.DataTexture): void {
+    const res = tex.image.width;
+    this.fillHeightData(tex.image.data as Float32Array, res);
+    tex.needsUpdate = true;
+  }
+
+  private fillHeightData(data: Float32Array, res: number): void {
+    const E = this.extent, S = this.S;
+    const span = S + 2 * E;
+    for (let j = 0; j < res; j++) {
+      const z = -E + (j / (res - 1)) * span;
+      for (let i = 0; i < res; i++) data[j * res + i] = this.meshHeight(-E + (i / (res - 1)) * span, z);
+    }
   }
 
   /** Build the ring mesh geometry (the map interior is left open). */
@@ -190,6 +232,12 @@ export class FarLand {
         pos[o + 1] = x > 0 && z > 0 && x < S && z < S ? 0 : this.height(x, z);
         pos[o + 2] = z;
       }
+    // keep the grid so meshHeight() can reproduce the drawn surface
+    this.axis = axis;
+    const grid = new Float32Array(n * n);
+    for (let k = 0; k < n * n; k++) grid[k] = pos[k * 3 + 1];
+    this.grid = grid;
+    this.version++;
     const idx: number[] = [];
     const eps = 0.5;
     for (let j = 0; j < n - 1; j++)

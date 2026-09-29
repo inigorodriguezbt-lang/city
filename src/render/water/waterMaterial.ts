@@ -118,7 +118,11 @@ export function createWaterMaterial(wu: WaterUniforms, shared: SharedUniforms, s
           bool insideMap = wp.x >= 0.0 && wp.y >= 0.0 && wp.x <= uMapSize && wp.y <= uMapSize;
           if (insideMap) {
             vec4 hs = hSample(wp);
-            if (hs.g < -500.0 || abs(hs.g - level) > 0.35) discard;
+            // the sea shows where sea water is near, plus any land a flood
+            // (storm surge, tsunami) has pushed the sea over
+            bool nearSea = hs.g > -500.0 && abs(hs.g - level) <= 0.35;
+            bool flooded = uFlood > 0.01 && hs.r < level;
+            if (!nearSea && !flooded) discard;
             groundH = hs.r;
           } else {
             groundH = farHeight(wp);

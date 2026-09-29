@@ -20,8 +20,9 @@ export class WaterRenderer {
   private grid: ChunkGrid;
   private chunks = new Map<number, THREE.Mesh>();
   private hasSea = false;
+  private farVersion = 0;
 
-  constructor(readonly world: World, private readonly shared: SharedUniforms, terrain: TerrainRenderer, waterNormal: THREE.Texture) {
+  constructor(readonly world: World, private readonly shared: SharedUniforms, private readonly terrain: TerrainRenderer, waterNormal: THREE.Texture) {
     this.group.name = 'water';
     const wu = (this.uniforms = createWaterUniforms());
     wu.uHTex.value = terrain.data.hTex;
@@ -29,12 +30,13 @@ export class WaterRenderer {
     wu.uWaterNormal.value = waterNormal;
     wu.uShallow.value.set(world.theme.waterShallow);
     wu.uDeep.value.set(world.theme.waterDeep);
-    const far = terrain.far.createHeightTexture(128);
+    const far = terrain.far.createHeightTexture();
     this.farTex = far.tex;
+    this.farVersion = terrain.far.version;
     wu.uFarTex.value = far.tex;
     wu.uFarOrigin.value = far.origin;
     wu.uFarSpan.value = far.span;
-    wu.uFarRes.value = 128;
+    wu.uFarRes.value = far.tex.image.width;
     this.seaMaterial = createWaterMaterial(wu, shared, true);
     this.inlandMaterial = createWaterMaterial(wu, shared, false);
     this.grid = new ChunkGrid(world.size, CHUNK);
@@ -80,6 +82,12 @@ export class WaterRenderer {
     this.shared.uFlood.value = w.floodOffset;
     if (this.sea) this.sea.position.y = w.seaLevel + w.floodOffset;
     if (this.sea) this.sea.updateMatrix();
+    // the landscape ring was rebuilt (border terrain edits): refresh sea depths beyond the map
+    const far = this.terrain.far;
+    if (this.farTex && far.version !== this.farVersion) {
+      this.farVersion = far.version;
+      far.updateHeightTexture(this.farTex);
+    }
     const keys = this.grid.take(this.grid.dirty.size > 64 && this.chunks.size === 0 ? this.grid.dirty.size : maxBuilds, focusX, focusY);
     for (const k of keys) this.buildChunk(k);
   }

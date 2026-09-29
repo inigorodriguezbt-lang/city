@@ -98,8 +98,8 @@ export function exportDuty(flows: DayFlows): number {
   return flows.exportUnits * EXPORT_PRICE;
 }
 
-/** Write world.stats from a complete day (does not touch trafficFlow / vehicles). */
-export function writeStats(ctx: SimContext, a: DayAgg): void {
+/** Write world.stats from a complete day pass covering `dtDays` days (does not touch trafficFlow / vehicles). */
+export function writeStats(ctx: SimContext, a: DayAgg, dtDays = 1): void {
   const w = ctx.world, s = w.stats, r = ctx.state.rates, f = ctx.game.fields, roll = ctx.state.roll;
   s.population = Math.round(a.population);
   s.households = Math.round(a.households);
@@ -121,7 +121,7 @@ export function writeStats(ctx: SimContext, a: DayAgg): void {
   s.sewage = { capacity: round1(f?.sewage?.produced ?? 0), produced: round1(f?.sewage?.consumed ?? 0) };
   s.garbage = {
     capacity: Math.round((a.gbThroughput + a.gbIntake) * 30),
-    produced: Math.round(a.garbageProduced * 30),
+    produced: Math.round((a.garbageProduced / Math.max(1, dtDays)) * 30),
     stored: Math.round(a.gbStored),
   };
   s.health_ = { capacity: Math.round(a.healthCap), sick: Math.round(a.sick) };

@@ -219,4 +219,8 @@ export const SERVICE_GRACE_DAYS = 45;
 // ── chirper / advisor ───────────────────────────────────────────────────────
 export const CHIRP_MIN_GAP = 2;
 export const CHIRP_MAX_GAP = 5;
-export const ADVISOR_MIN_GAP = 3;
+/** days between two advisor notices (info tips wait a little longer) */
+export const ADVISOR_MIN_GAP = 5;
+export const ADVISOR_INFO_EXTRA_GAP = 3;
+/** a danger tip may interrupt the normal rhythm this many days after the last notice */
+export const ADVISOR_URGENT_GAP = 2;

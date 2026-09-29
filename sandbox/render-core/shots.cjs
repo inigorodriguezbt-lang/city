@@ -32,7 +32,7 @@ const fs = require('fs');
         Object.assign(s.graphics, v.settings);
         r.applySettings(s);
       }
-      if (v.cam) r.cameraCtl.setPose(v.cam[0], v.cam[1], v.cam[2], (v.cam[3] * Math.PI) / 180, (v.cam[4] * Math.PI) / 180);
+      if (v.cam) r.cameraCtl.setPose(v.cam[0] < 0 ? w.home.x : v.cam[0], v.cam[1] < 0 ? w.home.y : v.cam[1], v.cam[2], (v.cam[3] * Math.PI) / 180, (v.cam[4] * Math.PI) / 180);
       if (!v.blend) r.snapTransitions();
       if (v.eval) new Function('r', 'w', v.eval)(r, w);
       window.__mark = window.__frames;

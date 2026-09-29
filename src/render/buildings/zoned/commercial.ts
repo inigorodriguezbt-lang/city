@@ -304,7 +304,7 @@ function hotelTower(f: Fab, k: StyleKit): void {
   if (mat !== 'wall_glass') withFace(f, 'S', 0, tz, tw, td, (len) => {
     const ys: number[] = [];
     for (let i = 1; i < floors; i++) ys.push(y0 + i * fh + 0.02);
-    balconies(f, len - 1, ys, { bay: 3.6, depth: 1.2, rail: 'glass', slab: '#d0ccc4', railColor: '#9fbcc6', every: 1 });
+    balconies(f, len - 1, ys, { bay: 3.6, depth: 1.2, rail: 'glass', wall: wc, slab: '#d0ccc4', railColor: '#9fbcc6', every: 1 });
   });
   flatRoof(f, 0, tz, tw, td, top, 1.2, mat, wc, '#6f6c66', lt);
   if (k.id === 'artdeco') artDecoCrown(f, 0, tz, tw * 0.6, td * 0.8, top, lt, rng);
@@ -363,7 +363,7 @@ export function mixedUse(f: Fab): void {
     const ys: number[] = [];
     for (let i = 1; i < floors - 1; i++) ys.push(4.6 + i * fh + 0.02);
     const rail = k.id === 'modern' || k.id === 'futuristic' ? 'glass' : k.id === 'asian' ? 'solid' : 'iron';
-    withFace(f, 'S', 0, bz, bw, bd, (len) => balconies(f, len, ys, { bay: 3.2, depth: 1.1, rail, slab: '#cbc7bf', railColor: rail === 'glass' ? '#9fbcc6' : rail === 'solid' ? shade(wc, 0.92) : '#25272a', continuous: k.id === 'modern' || k.id === 'futuristic', every: k.id === 'european' ? 1 : 2 }));
+    withFace(f, 'S', 0, bz, bw, bd, (len) => balconies(f, len, ys, { bay: 3.2, depth: 1.1, rail, wall: wc, slab: '#cbc7bf', railColor: rail === 'glass' ? '#9fbcc6' : rail === 'solid' ? shade(wc, 0.92) : '#25272a', continuous: k.id === 'modern' || k.id === 'futuristic', every: k.id === 'european' ? 1 : 2 }));
   }
   withFace(f, 'S', 0, bz, bw, bd, (len) => {
     storefronts(f, k, len, Math.max(1, Math.round(len / 7)), { blade: k.id === 'asian' });

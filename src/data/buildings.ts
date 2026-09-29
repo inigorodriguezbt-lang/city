@@ -56,13 +56,13 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'hydro_dam', name: 'Hydroelectric Dam', icon: '🌉', category: 'power', group: 'Renewable',
     description: 'A curved concrete dam that turns falling river water into huge amounts of clean power. Must be built across flowing water.',
-    w: 5, h: 2, cost: 125_000, upkeep: 3_800, unlock: 7, model: 'hydro_dam', height: 42, power: 320, jobs: 24,
+    w: 5, h: 2, cost: 125_000, upkeep: 3_800, unlock: 7, model: 'hydro_dam', height: 23, power: 320, jobs: 24,
     placement: { onWater: true, road: true, maxSlope: 0.8 }, effects: [fx('tourism', 12, 40)], tags: ['renewable', 'clean', 'hydro', 'river', 'dam', 'electricity'],
   },
   {
     id: 'geothermal_plant', name: 'Geothermal Plant', icon: '♨️', category: 'power', group: 'Renewable',
     description: 'Taps superheated steam from deep wells. Reliable baseload with only a whiff of sulphur.',
-    w: 3, h: 3, cost: 52_000, upkeep: 2_000, unlock: 7, model: 'geothermal_plant', height: 26, power: 85, jobs: 14,
+    w: 3, h: 3, cost: 52_000, upkeep: 2_000, unlock: 7, model: 'geothermal_plant', height: 16, power: 85, jobs: 14,
     effects: [fx('pollution', 5, 30), fx('noise', 6, 70)], tags: ['renewable', 'steam', 'baseload', 'electricity'],
   },
   {
@@ -99,13 +99,13 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'nuclear_plant', name: 'Nuclear Power Plant', icon: '☢️', category: 'power', group: 'Advanced',
     description: 'Two hyperboloid cooling towers and a pressurised-water reactor under a steel containment dome. A gigawatt of carbon-free baseload.',
-    w: 6, h: 6, cost: 460_000, upkeep: 16_000, unlock: 9, model: 'nuclear_plant', height: 150, power: 1_000, jobs: 280,
+    w: 6, h: 6, cost: 460_000, upkeep: 16_000, unlock: 9, model: 'nuclear_plant', height: 105, power: 1_000, jobs: 280,
     effects: [fx('noise', 8, 90), fx('landValue', 14, -50)], tags: ['nuclear', 'reactor', 'baseload', 'uranium', 'electricity'],
   },
   {
     id: 'fusion_plant', name: 'Fusion Power Plant', icon: '⚛️', category: 'power', group: 'Advanced',
     description: 'A superconducting tokamak confines a star in a magnetic bottle. Almost limitless clean energy for a true metropolis.',
-    w: 6, h: 6, cost: 1_450_000, upkeep: 42_000, unlock: 11, model: 'fusion_plant', height: 70, power: 2_400, jobs: 320,
+    w: 6, h: 6, cost: 1_450_000, upkeep: 42_000, unlock: 11, model: 'fusion_plant', height: 37, power: 2_400, jobs: 320,
     effects: [fx('noise', 6, 50), fx('tourism', 20, 60)], tags: ['fusion', 'tokamak', 'futuristic', 'clean', 'electricity'],
   },
 
@@ -125,7 +125,7 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'water_pump_large', name: 'Large Pumping Station', icon: '🚰', category: 'water', group: 'Supply',
     description: 'A heavy-duty intake with four pump trains and a surge tank. Supplies a whole district.',
-    w: 2, h: 3, cost: 16_000, upkeep: 700, unlock: 4, model: 'water_pump_large', height: 14, water: 3_000, jobs: 10,
+    w: 2, h: 3, cost: 16_000, upkeep: 700, unlock: 4, model: 'water_pump_large', height: 20, water: 3_000, jobs: 10,
     placement: { shore: true }, tags: ['water', 'pump', 'intake', 'shore'],
   },
   {
@@ -149,13 +149,13 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'sewage_treatment', name: 'Sewage Treatment Plant', icon: '🧼', category: 'water', group: 'Sewage',
     description: 'Round clarifiers and aeration tanks clean wastewater before releasing it. Far less pollution than an outlet.',
-    w: 4, h: 4, cost: 30_000, upkeep: 1_300, unlock: 4, model: 'sewage_treatment', height: 12, sewage: 3_000, jobs: 22,
+    w: 4, h: 4, cost: 30_000, upkeep: 1_300, unlock: 4, model: 'sewage_treatment', height: 22, sewage: 3_000, jobs: 22,
     placement: { shore: true }, effects: [fx('pollution', 4, 40), fx('landValue', 6, -25)], tags: ['sewage', 'treatment', 'clarifier', 'shore'],
   },
   {
     id: 'sewage_treatment_adv', name: 'Advanced Treatment Plant', icon: '🫧', category: 'water', group: 'Sewage',
     description: 'Membrane bioreactors under a green roof return crystal-clear water to nature. Odourless, silent, spotless.',
-    w: 4, h: 3, cost: 88_000, upkeep: 3_400, unlock: 8, model: 'sewage_treatment_adv', height: 14, sewage: 6_500, jobs: 30,
+    w: 4, h: 3, cost: 88_000, upkeep: 3_400, unlock: 8, model: 'sewage_treatment_adv', height: 25, sewage: 6_500, jobs: 30,
     placement: { shore: true }, tags: ['sewage', 'treatment', 'eco', 'membrane', 'shore'],
   },
 
@@ -163,7 +163,7 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'landfill', name: 'Landfill Site', icon: '🗑️', category: 'garbage', group: 'Disposal',
     description: 'A lined pit where the city\'s rubbish is buried. Cheap, smelly, and it fills up — empty or replace it in time.',
-    w: 3, h: 3, cost: 4_500, upkeep: 180, unlock: 1, model: 'landfill', height: 8, jobs: 10,
+    w: 3, h: 3, cost: 4_500, upkeep: 180, unlock: 1, model: 'landfill', height: 10, jobs: 10,
     capacity: 40_000, capacityLabel: 'tons stored', vehicles: { type: 'garbage', count: 4 },
     effects: [fx('garbage', 30, 220), fx('pollution', 8, 120), fx('landValue', 10, -60)], tags: ['garbage', 'dump', 'trash', 'waste'],
   },
@@ -207,7 +207,7 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'hospital', name: 'Hospital', icon: '🩺', category: 'health', group: 'Care',
     description: 'A general hospital tower with an emergency department and a rooftop helipad. Covers a large area.',
-    w: 3, h: 3, cost: 30_000, upkeep: 1_400, unlock: 4, model: 'hospital', height: 36, jobs: 110,
+    w: 3, h: 3, cost: 30_000, upkeep: 1_400, unlock: 4, model: 'hospital', height: 47, jobs: 110,
     capacity: 500, capacityLabel: 'patients', vehicles: { type: 'ambulance', count: 10 },
     effects: [fx('health', 26, 230)], tags: ['health', 'hospital', 'ambulance', 'emergency', 'helipad'],
   },
@@ -234,7 +234,7 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'medical_lab', name: 'Medical Research Lab', icon: '🔬', category: 'health', group: 'Specialist',
     description: 'Scientists develop vaccines and treatments here, boosting the health of the whole region.',
-    w: 3, h: 2, cost: 42_000, upkeep: 1_700, unlock: 7, model: 'medical_lab', height: 18, jobs: 70,
+    w: 3, h: 2, cost: 42_000, upkeep: 1_700, unlock: 7, model: 'medical_lab', height: 22, jobs: 70,
     effects: [fx('health', 34, 90), fx('education', 12, 50), fx('landValue', 8, 30)], tags: ['health', 'research', 'science', 'lab', 'vaccine'],
   },
   {
@@ -246,7 +246,7 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'spa_sanatorium', name: 'Sanatorium & Spa', icon: '🧖', category: 'health', group: 'Care',
     description: 'Thermal pools, massage and clean air. Heals body and mind — and draws wellness tourists.',
-    w: 3, h: 3, cost: 38_000, upkeep: 1_400, unlock: 6, model: 'spa_sanatorium', height: 16, jobs: 48,
+    w: 3, h: 3, cost: 38_000, upkeep: 1_400, unlock: 6, model: 'spa_sanatorium', height: 19, jobs: 48,
     capacity: 200, capacityLabel: 'guests', effects: [fx('health', 20, 150), fx('happiness', 18, 60), fx('leisure', 14, 90), fx('tourism', 18, 60)], tags: ['health', 'spa', 'wellness', 'thermal', 'pool'],
   },
 
@@ -254,7 +254,7 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'cemetery', name: 'Cemetery', icon: '🪦', category: 'deathcare', group: 'Deathcare',
     description: 'Quiet rows of headstones between cypress trees and a small chapel. Fills up over the years.',
-    w: 3, h: 3, cost: 4_500, upkeep: 200, unlock: 5, model: 'cemetery', height: 10, jobs: 8,
+    w: 3, h: 3, cost: 4_500, upkeep: 200, unlock: 5, model: 'cemetery', height: 18, jobs: 8,
     capacity: 6_000, capacityLabel: 'graves', vehicles: { type: 'hearse', count: 6 },
     effects: [fx('deathcare', 24, 220), fx('landValue', 6, -20)], tags: ['deathcare', 'graves', 'hearse', 'funeral'],
   },
@@ -309,7 +309,7 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'police_station', name: 'Police Station', icon: '🚓', category: 'police', group: 'Stations',
     description: 'A neighbourhood precinct with patrol cars out front. Keeps crime in check.',
-    w: 2, h: 2, cost: 6_000, upkeep: 280, unlock: 2, model: 'police_station', height: 12, jobs: 18,
+    w: 2, h: 2, cost: 6_000, upkeep: 280, unlock: 2, model: 'police_station', height: 15, jobs: 18,
     vehicles: { type: 'police', count: 4 }, effects: [fx('police', 18, 220)], tags: ['police', 'crime', 'patrol', 'cops'],
   },
   {
@@ -354,13 +354,13 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'trade_school', name: 'Trade School', icon: '🛠️', category: 'education', group: 'Schools',
     description: 'Workshops for welders, electricians and mechanics. Industry\'s favourite school.',
-    w: 3, h: 3, cost: 28_000, upkeep: 1_200, unlock: 5, model: 'trade_school', height: 14, jobs: 40,
+    w: 3, h: 3, cost: 28_000, upkeep: 1_200, unlock: 5, model: 'trade_school', height: 24, jobs: 40,
     capacity: 800, capacityLabel: 'students', effects: [fx('education', 20, 150)], tags: ['education', 'vocational', 'industry', 'workshop'],
   },
   {
     id: 'community_college', name: 'Community College', icon: '📚', category: 'education', group: 'Higher Education',
     description: 'Affordable higher education in a modern campus block with a green quad.',
-    w: 3, h: 4, cost: 46_000, upkeep: 1_900, unlock: 5, model: 'community_college', height: 20, jobs: 70,
+    w: 3, h: 4, cost: 46_000, upkeep: 1_900, unlock: 5, model: 'community_college', height: 15, jobs: 70,
     capacity: 1_600, capacityLabel: 'students', effects: [fx('education', 26, 190)], tags: ['education', 'college', 'adult', 'campus'],
   },
   {
@@ -390,7 +390,7 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'research_institute', name: 'Research Institute', icon: '🧬', category: 'education', group: 'Culture & Research',
     description: 'Cutting-edge laboratories and a particle accelerator ring. Attracts brilliant minds and high-tech offices.',
-    w: 4, h: 4, cost: 165_000, upkeep: 6_000, unlock: 8, model: 'research_institute', height: 28, jobs: 180,
+    w: 4, h: 4, cost: 165_000, upkeep: 6_000, unlock: 8, model: 'research_institute', height: 22, jobs: 180,
     effects: [fx('education', 40, 140), fx('landValue', 16, 70)], tags: ['education', 'research', 'science', 'lab', 'accelerator'],
   },
 
@@ -446,7 +446,7 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'tennis_club', name: 'Tennis Club', icon: '🎾', category: 'parks', group: 'Sports',
     description: 'Three clay courts and a clubhouse terrace. A touch of class for the neighbourhood.',
-    w: 3, h: 2, cost: 8_000, upkeep: 300, unlock: 3, model: 'tennis_club', height: 8,
+    w: 3, h: 2, cost: 8_000, upkeep: 300, unlock: 3, model: 'tennis_club', height: 10,
     effects: [fx('leisure', 14, 140), fx('landValue', 12, 50)], attractiveness: 15, tags: ['park', 'tennis', 'sports', 'club'],
   },
   {
@@ -594,7 +594,7 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'metro_station', name: 'Metro Station', icon: 'Ⓜ️', category: 'transit', group: 'Rail',
     description: 'A glass entrance pavilion over an underground station. Fast, silent, and takes cars off the road.',
-    w: 2, h: 2, cost: 18_000, upkeep: 800, unlock: 7, model: 'metro_station', height: 7, jobs: 10,
+    w: 2, h: 2, cost: 18_000, upkeep: 800, unlock: 7, model: 'metro_station', height: 9, jobs: 10,
     vehicles: { type: 'metro', count: 2 }, effects: [fx('transit', 14, 200), fx('landValue', 10, 30)], tags: ['transit', 'metro', 'subway', 'underground'],
   },
   {
@@ -692,7 +692,7 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'radio_mast', name: 'Radio Mast', icon: '📡', category: 'government', group: 'Infrastructure',
     description: 'A guyed steel lattice mast broadcasting local radio and emergency alerts, beacons blinking at night.',
-    w: 1, h: 1, cost: 4_000, upkeep: 120, unlock: 2, model: 'radio_mast', height: 120, jobs: 2,
+    w: 1, h: 1, cost: 4_000, upkeep: 120, unlock: 2, model: 'radio_mast', height: 118, jobs: 2,
     effects: [fx('happiness', 26, 20)], tags: ['government', 'radio', 'antenna', 'broadcast', 'mast'],
   },
 
@@ -879,7 +879,7 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'eden_domes', name: 'Eden Biomes', icon: '🌍', category: 'monument', group: 'Wonders',
     description: 'Interlocking geodesic domes housing rainforest and desert biomes. A living ark for the planet.',
-    w: 7, h: 6, cost: 2_800_000, upkeep: 16_000, unlock: 11, model: 'eden_domes', height: 50, jobs: 140,
+    w: 7, h: 6, cost: 2_800_000, upkeep: 16_000, unlock: 11, model: 'eden_domes', height: 29, jobs: 140,
     placement: { unique: true }, effects: [fx('tourism', 70, 240), fx('leisure', 50, 200), fx('pollution', 24, -140), fx('education', 40, 80)], attractiveness: 60, tags: ['monument', 'dome', 'geodesic', 'biome', 'eco', 'wonder', 'unique'],
   },
   {
@@ -911,7 +911,7 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'visitor_center', name: 'Visitor Center', icon: 'ℹ️', category: 'tourism', group: 'Visitors',
     description: 'Maps, guided tours and souvenirs. Helps tourists discover everything the city has to offer.',
-    w: 2, h: 2, cost: 12_000, upkeep: 420, unlock: 3, model: 'visitor_center', height: 9, jobs: 12,
+    w: 2, h: 2, cost: 12_000, upkeep: 420, unlock: 3, model: 'visitor_center', height: 20, jobs: 12,
     effects: [fx('tourism', 24, 90), fx('leisure', 8, 40)], tags: ['tourism', 'information', 'tours', 'souvenirs'],
   },
   {
@@ -923,13 +923,13 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'resort', name: 'Resort Hotel', icon: '🌴', category: 'tourism', group: 'Hotels',
     description: 'A terraced luxury resort wrapped around a lagoon pool, cabanas and a spa.',
-    w: 5, h: 4, cost: 92_000, upkeep: 2_600, unlock: 6, model: 'resort', height: 30, jobs: 140,
+    w: 5, h: 4, cost: 92_000, upkeep: 2_600, unlock: 6, model: 'resort', height: 21, jobs: 140,
     capacity: 600, capacityLabel: 'guests', effects: [fx('tourism', 26, 170), fx('leisure', 12, 80), fx('landValue', 14, 60)], tags: ['tourism', 'resort', 'pool', 'luxury'],
   },
   {
     id: 'beach_resort', name: 'Beach Resort', icon: '🏝️', category: 'tourism', group: 'Hotels',
     description: 'Overwater bungalows on stilts, a white-sand beach and a curving hotel wing. Paradise found.',
-    w: 5, h: 3, cost: 115_000, upkeep: 3_000, unlock: 6, model: 'beach_resort', height: 24, jobs: 150,
+    w: 5, h: 3, cost: 115_000, upkeep: 3_000, unlock: 6, model: 'beach_resort', height: 14, jobs: 150,
     capacity: 500, capacityLabel: 'guests', placement: { shore: true }, effects: [fx('tourism', 30, 190), fx('leisure', 14, 90), fx('landValue', 16, 80)], tags: ['tourism', 'beach', 'resort', 'bungalows', 'sea', 'shore'],
   },
   {
@@ -943,7 +943,7 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'farm_coop', name: 'Farm Cooperative', icon: '🚜', category: 'industry', group: 'Resource',
     description: 'Shared grain silos, a machinery barn and a farmers\' market. Place on fertile land to boost the farming industry.',
-    w: 4, h: 4, cost: 30_000, upkeep: 1_100, unlock: 3, model: 'farm_coop', height: 26, jobs: 40,
+    w: 4, h: 4, cost: 30_000, upkeep: 1_100, unlock: 3, model: 'farm_coop', height: 31, jobs: 40,
     placement: { resource: 'fertility' }, effects: [fx('landValue', 6, 10)], tags: ['industry', 'farming', 'silo', 'barn', 'agriculture'],
   },
   {

@@ -1,6 +1,6 @@
 // Electricity: wind, solar, hydro, geothermal, biomass, fossil, nuclear, fusion.
 import * as THREE from 'three';
-import { Kit, type P2, type V3 } from './kit';
+import { Kit, blobPts, type P2, type V3 } from './kit';
 import { C, shade, mix, lawnColor, dryGround } from './colors';
 import { models } from './define';
 import { chimney, conveyor, fence, pile, pylon, sphereTank, solarRow, tank, truck, tree, logPile } from './props';
@@ -240,13 +240,26 @@ const M: Record<string, (k: Kit) => number> = {
     k.flat('water', 0, D / 2 - 0.5, W - 6, 2, base + 0.5, 0x6fa7b0);
     k.emitter('steam', 0, base + 2, D / 2 - 1, 1);
     k.emitter('steam', -3, base + 1, 9, 0.8);
+    // gantry crane over the spillway gates, intake towers, control house
+    for (const sx of [-1, 1]) k.beam('metal', [sx * 7.5, crest + 1.2, -1.5], [sx * 7.5, crest + 8, -1.5], 0.6, 1.4, C.yellow);
+    k.box('metal', 0, crest + 8, -1.5, 16.4, 1.1, 1.6, C.yellow);
+    k.box('metal', -2, crest + 6.6, -1.5, 2.2, 1.4, 1.8, 0x3a3d42);
+    for (const sx of [-1, 1]) {
+      const [ix, iz] = arc(sx < 0 ? 0.22 : 0.78, -crestW / 2 - 3.2);
+      k.cyl('concrete', ix, crest - 6, iz, 1.8, 1.8, 8.4, 0xc8c4bc, k.seg(12));
+      k.cyl('roof_metal', ix, crest + 2.4, iz, 2.2, 0.4, 1.4, 0x5a6d7a, k.seg(12));
+      k.beam('concrete', [ix, crest + 1.3, iz + 1.8], [ix, crest + 1.3, iz + 3.2], 1.2, 0.3, 0xc8c4bc);
+    }
+    k.box('wall_concrete', -W / 2 + 2, crest + 1.2, -14, 3.6, 3.4, 6, 0xd6d2c8, { top: 'roof_flat', topColor: 0x6a6e72 });
+    k.light(-W / 2 + 2, crest + 4, -10.8, C.lampWarm, 2.6, 'lamp');
+    k.light(0, crest + 8.6, -1.5, C.beaconRed, 2.5, 'beacon', true);
     // lights on the crest
     for (let i = 0; i < 6; i++) {
       const [lx, lz] = arc((i + 0.5) / 6, crestW / 2 - 0.3);
       k.cyl('metal', lx, crest + 1.1, lz, 0.08, 0.08, 4.5, 0x333333, 5);
       k.light(lx, crest + 5.6, lz, C.lampWarm, 4, 'lamp');
     }
-    return crest + 5;
+    return crest + 9.2;
   },
 
   geothermal_plant(k) {
@@ -279,6 +292,17 @@ const M: Record<string, (k: Kit) => number> = {
     pipe([[-17, 1.6, -3], [-12, 1.6, -3], [-12, 1.6, 2], [-8, 1.6, 2], [-8, 4.2, 2], [-4, 4.2, 2], [-4, 1.6, 2], [6, 1.6, 2], [8, 1.6, D / 2 - 10]]);
     pipe([[-17, 1.6, -15], [-12, 1.6, -15], [-12, 1.6, -3.6]]);
     for (const x of [-10, -2, 4]) k.box('concrete', x, 0, 2, 0.6, 1.2, 1.4, 0x9a968d);
+    // milky-turquoise silica pool fed by the brine outflow, steaming gently
+    const pool = blobPts(13, -3, 6.5, 3.6, k.seg(18), 0.16, 7);
+    k.poly('sand', blobPts(13, -3, 7.6, 4.5, k.seg(18), 0.16, 7), 0.07, 0xd8d4c4);
+    k.poly('water', pool, 0.12, 0x7fd3d6);
+    for (const [x, z] of [[10, -3], [15, -2]] as P2[]) k.emitter('steam', x, 0.6, z, 0.5);
+    k.polyPipe('metal', [[8, 1.6, 2], [8, 1.6, 0.4], [9.5, 0.4, -0.6]], 0.3, 0xd8d8d0, 6);
+    // silencer / vent stack
+    k.cyl('metal', -1, 0, -6, 1.6, 1.6, 7, 0xc8c4bc, k.seg(12));
+    k.cyl('metal', -1, 7, -6, 1.6, 1.2, 1.2, 0xb8b4ac, k.seg(12), true);
+    k.emitter('steam', -1, 8.5, -6, 0.7);
+    lampsAlong(k, [[-W / 2 + 2, D / 2 - 1.5], [W / 2 - 2, D / 2 - 1.5]], 14, 6, 'modern', 0);
     return 16;
   },
 

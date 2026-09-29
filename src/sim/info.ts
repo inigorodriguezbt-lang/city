@@ -2,6 +2,7 @@
 // a deterministic list of the people who live or work there.
 import { BFlag, Problem, type Building, type BuildingDef, type FieldId } from '../core/types';
 import { hashFloat } from '../core/rng';
+import { CELL } from '../core/constants';
 import { formatMoney, formatNumber } from '../core/util';
 import { CATEGORY_INFO } from '../data/buildings';
 import { OCCUPATIONS, firstName, lastName, personName, pickName } from '../data/names';
@@ -71,6 +72,9 @@ const SERVICE_JOBS: Partial<Record<string, readonly string[]>> = {
   tourism: ['Receptionist', 'Concierge', 'Chef', 'Housekeeper', 'Entertainer'],
   industry: ['Operator', 'Engineer', 'Logistics planner', 'Forklift driver'],
 };
+
+/** fields whose positive effects are a service coverage (shown as the coverage radius) */
+const COVERAGE_FIELDS = new Set<FieldId>(['police', 'fire', 'health', 'education', 'leisure', 'garbage', 'deathcare', 'transit', 'tourism']);
 
 const pct = (v: number): string => `${Math.round(v * 100)}%`;
 const bar = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -290,8 +294,10 @@ export function buildingInfo(ctx: SimContext, id: number): BuildingInfo | null {
       lines.push({ label: 'In use', value: `${formatNumber(b.visitors)} / ${formatNumber(Math.round(cap * Math.max(0, b.efficiency)))} ${label}`, bar: bar(b.visitors / Math.max(1, cap * b.efficiency)) });
     }
   }
-  const radius = def.effects?.reduce((mx, e) => (e.amount > 0 && e.field !== 'landValue' && e.field !== 'happiness' ? Math.max(mx, e.radius) : mx), 0) ?? 0;
-  if (radius > 0) lines.push({ label: 'Coverage radius', value: `${radius} cells (${radius * 16} m)` });
+  const radius = def.effects?.reduce((mx, e) => (e.amount > 0 && COVERAGE_FIELDS.has(e.field) ? Math.max(mx, e.radius) : mx), 0) ?? 0;
+  if (radius > 0) lines.push({ label: 'Coverage radius', value: `${radius} cells (${radius * CELL} m)` });
+  const emits = def.effects?.filter((e) => e.amount > 0 && (e.field === 'pollution' || e.field === 'noise')) ?? [];
+  for (const e of emits) lines.push({ label: e.field === 'pollution' ? 'Pollutes' : 'Noise', value: `within ${e.radius} cells`, kind: 'bad' });
   utilityLines(b, def, lines);
   if (def.vehicles) lines.push({ label: 'Vehicles', value: `${def.vehicles.count} ${def.vehicles.type === 'service' ? 'service vehicles' : def.vehicles.type + (def.vehicles.count > 1 ? 's' : '')}` });
   if ((def.category === 'tourism' || def.category === 'landmark' || def.category === 'monument') && b.visitors > 0 && !isHousing(def)) {

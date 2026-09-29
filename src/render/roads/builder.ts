@@ -24,7 +24,10 @@ import { GAUGE_HALF, JF, Kind, MF, profileOf, STYLE_JUNCTION, type Profile } fro
 import { DECK_THICKNESS, type RoadHeightField } from './surface';
 
 const ROAD = ROAD_LIFT;
+/** lift of guard-rail posts etc. standing on the terrain beside the road */
 const VERGE = 0.04;
+/** outer edge of gravel fringes / ballast shoulders: slightly below the terrain so they meet it without a gap */
+const SINK = -0.04;
 const CURB = 0.16;
 /** bridge parapet width */
 const PW = 0.4;
@@ -52,12 +55,15 @@ interface IP {
   hw: number;
   sw: number;
   ch: number;
+  fringe: number;
 }
 
 interface SideInfo {
   a: number;
   sw: number;
   ch: number;
+  /** gravel fringe width beyond the sidewalk back */
+  f: number;
   conn: boolean;
 }
 
@@ -211,7 +217,10 @@ export class ChunkBuilder {
 
   private carSection(own: Profile, style: number, flags: number, bridge: boolean, pavedL: boolean, pavedR: boolean): Section {
     const cs = this.lod === 0 ? 2 : 1;
-    const vk = (paved: boolean): Kind => (bridge ? Kind.Concrete : paved ? Kind.Pavers : Kind.Grass);
+    // outer layers: bridge parapet deck, pavers toward a pedestrian street, the
+    // ragged gravel fringe of unpaved roads — otherwise zero width (the real
+    // terrain shows beside the sidewalk, so verges always match the ground)
+    const vk = (paved: boolean): Kind => (bridge ? Kind.Concrete : paved ? Kind.Pavers : own.kind === Kind.Gravel ? Kind.Gravel : Kind.Grass);
     const wk = bridge ? Kind.Concrete : Kind.Curb;
     return {
       kind: [vk(pavedL), Kind.Sidewalk, Kind.Curb, own.kind, Kind.Grass, own.kind, Kind.Curb, Kind.Sidewalk, vk(pavedR)],
@@ -222,19 +231,28 @@ export class ChunkBuilder {
     };
   }
 
+  /**
+   * One cross-section row of a car / pedestrian piece. eL / eR are the outer
+   * extents used on bridges (parapet) and toward pedestrian streets (pavers);
+   * on land the section ends at the sidewalk back (or the gravel fringe).
+   */
   private carRow(tau: number, p: IP, eL: number, eR: number, bridge: boolean, pavedL: boolean, pavedR: boolean, mi: number, mask: number, barrier = false): Row {
     const hw = this.hwOf(p, bridge);
     const sw = this.swOf(p, bridge);
     const ct = Math.min(0.15, sw);
     const sl = ROAD + p.ch;
-    const b = [-eL, -(hw + sw), -(hw + ct), -hw, -mi, mi, hw, hw + ct, hw + sw, eR];
+    const back = hw + sw;
+    const fr = bridge ? 0 : p.fringe;
+    const outL = bridge || (pavedL && !bridge) ? eL : back + fr;
+    const outR = bridge || (pavedR && !bridge) ? eR : back + fr;
+    const b = [-outL, -back, -(hw + ct), -hw, -mi, mi, hw, hw + ct, back, outR];
     for (let i = 1; i < b.length; i++) if (b[i] < b[i - 1]) b[i] = b[i - 1];
     let vin: number, vout: number;
     if (bridge) vin = vout = barrier ? ROAD + 0.85 : sl + 0.14;
-    else {
-      vin = p.sw > 0.01 || p.ch > 0.01 ? VERGE : ROAD;
-      vout = VERGE;
-    }
+    else if (fr > 0.01) {
+      vin = sl;
+      vout = SINK;
+    } else vin = vout = sl;
     const vL = pavedL && !bridge ? ROAD : NaN, vR = pavedR && !bridge ? ROAD : NaN;
     const la = [Number.isNaN(vL) ? vout : vL, sl, sl, ROAD, ROAD + CURB, ROAD, sl, sl, Number.isNaN(vR) ? vin : vR];
     const lb = [Number.isNaN(vL) ? vin : vL, sl, sl, ROAD, ROAD + CURB, ROAD, sl, sl, Number.isNaN(vR) ? vout : vR];
@@ -247,6 +265,7 @@ export class ChunkBuilder {
     out.hw = a.hw + (b.hw - a.hw) * f;
     out.sw = a.sw + (b.sw - a.sw) * f;
     out.ch = a.ch + (b.ch - a.ch) * f;
+    out.fringe = a.fringe + (b.fringe - a.fringe) * f;
     return out;
   }
 
@@ -314,7 +333,7 @@ export class ChunkBuilder {
     }
     const tl = [...taus].sort((a, b) => a - b);
     const sec = this.carSection(own, style, flags, bridge, pedE, pedW);
-    const ipv: IP = { hw: 0, sw: 0, ch: 0 };
+    const ipv: IP = { hw: 0, sw: 0, ch: 0, fringe: 0 };
     const rows: Row[] = tl.map((tau) => {
       this.ip(p0, p1, tau / 16, ipv);
       const mi = M > 0 ? this.medianAt(tau, M, tip0, tip1) : 0;
@@ -371,7 +390,7 @@ export class ChunkBuilder {
     const M = p0.median > 0 && p1.median > 0 ? own.median : 0;
     const n = this.lod === 0 ? 8 : 4;
     const sec = this.carSection(own, style, flags, bridge, false, false);
-    const ipv: IP = { hw: 0, sw: 0, ch: 0 };
+    const ipv: IP = { hw: 0, sw: 0, ch: 0, fringe: 0 };
     const rows: Row[] = [];
     for (let i = 0; i <= n; i++) {
       const tau = (i / n) * 16;
@@ -427,24 +446,29 @@ export class ChunkBuilder {
     const sw = p.sw || own.sw;
     const ch = p.ch || own.ch;
     const ct = Math.min(0.15, sw);
-    const Rb = Math.max(own.hw, Math.min(own.hw + 1.8, 8 - sw - 0.3));
-    const Rc = Rb + ct, Rs = Rb + sw;
-    const zc = stem ? Math.min(8.5, 16 - Rs - 0.25) : 8;
+    const F = p.fringe || own.fringe;
+    const Rb = Math.max(own.hw, Math.min(own.hw + 1.8, 8 - sw - F - 0.3));
+    const Rc = Rb + ct, Rs = Rb + sw, Rf = Rs + F;
+    const zc = stem ? Math.min(8.5, 16 - Rf - 0.25) : 8;
     const circ = (R: number, v: number) => {
       const d = v - zc;
       return Math.abs(d) <= R ? Math.sqrt(R * R - d * d) : 0;
     };
-    const vs = new Set<number>([0, 16]);
+    // the piece ends at the far rim of the bulb (terrain beyond); isolated cells are a round plaza
+    const vEnd = Math.min(16, zc + Rf), vStart = stem ? 0 : zc - Rf;
+    const vs = new Set<number>([vStart, vEnd]);
     const na = this.lod === 0 ? 10 : 5;
     const starts: number[] = [];
-    for (const [R, wd] of [[Rb, hw], [Rc, hw + ct], [Rs, hw + sw]] as [number, number][]) {
+    const rings: [number, number][] = [[Rb, hw], [Rc, hw + ct], [Rs, hw + sw]];
+    if (F > 0) rings.push([Rf, hw + sw + F]);
+    for (const [R, wd] of rings) {
       const v0 = stem && R > wd ? zc - Math.sqrt(R * R - wd * wd) : stem ? zc : zc - R;
       starts.push(v0);
       const phi0 = Math.acos(Math.max(-1, Math.min(1, (zc - v0) / R)));
       for (let i = 0; i <= na; i++) {
         const ph = phi0 + ((Math.PI - phi0) * i) / na;
         const v = zc - R * Math.cos(ph);
-        if (v > 0.01 && v < 15.99) vs.add(v);
+        if (v > vStart + 0.01 && v < vEnd - 0.01) vs.add(v);
       }
       if (stem && zc - v0 > 0.01) vs.add(Math.max(0.02, v0 - 0.02));
     }
@@ -461,19 +485,20 @@ export class ChunkBuilder {
       const v = tip1 - M * (1 - Math.cos((i / 3) * HALF_PI));
       if (v > 0) vs.add(v);
     }
-    const vl = [...vs].sort((a, b) => a - b);
+    const vl = [...vs].filter((v) => v >= vStart && v <= vEnd).sort((a, b) => a - b);
     const sec = this.carSection(own, style, flags, false, false, false);
+    const sl = ROAD + ch;
+    const vo = F > 0 ? SINK : sl;
     const rows: Row[] = vl.map((v) => {
       const inStem = stem && v <= zc;
       const asph = inStem ? Math.max(hw, circ(Rb, v)) : circ(Rb, v);
       const ctop = Math.max(asph, inStem ? Math.max(hw + ct, circ(Rc, v)) : circ(Rc, v));
       const side = Math.max(ctop, inStem ? Math.max(hw + sw, circ(Rs, v)) : circ(Rs, v));
+      const outer = F > 0 ? Math.max(side, inStem ? Math.max(hw + sw + F, circ(Rf, v)) : circ(Rf, v)) : side;
       const mi = M > 0 ? this.medianAt(v, M, tip0, tip1) : 0;
-      const sl = ROAD + ch;
-      const vin = sw > 0.01 || ch > 0.01 ? VERGE : ROAD;
-      const b = [-8, -side, -ctop, -asph, -mi, mi, asph, ctop, side, 8];
-      const la = [VERGE, sl, sl, ROAD, ROAD + CURB, ROAD, sl, sl, vin];
-      const lb = [vin, sl, sl, ROAD, ROAD + CURB, ROAD, sl, sl, VERGE];
+      const b = [-outer, -side, -ctop, -asph, -mi, mi, asph, ctop, side, outer];
+      const la = [vo, sl, sl, ROAD, ROAD + CURB, ROAD, sl, sl, sl];
+      const lb = [sl, sl, sl, ROAD, ROAD + CURB, ROAD, sl, sl, vo];
       return { tau: v, b, la, lb, hw: Math.max(asph, 0.01), mask: v < markEnd ? 0xffff : 0 };
     });
     const skirt = fr.raised || rows.some((r) => r.la[0] > 0.06);
@@ -493,12 +518,12 @@ export class ChunkBuilder {
     const sides: SideInfo[] = [];
     for (let d = 0; d < 4; d++) {
       const p = arms[d];
-      if (p) sides[d] = { a: this.hwOf(p, bridge), sw: this.swOf(p, bridge), ch: p.ch, conn: true };
+      if (p) sides[d] = { a: this.hwOf(p, bridge), sw: this.swOf(p, bridge), ch: p.ch, f: bridge ? 0 : p.fringe, conn: true };
     }
     for (let d = 0; d < 4; d++) {
       if (sides[d]) continue;
       const a = arms[(d + 1) & 3] ?? own, b = arms[(d + 3) & 3] ?? own;
-      sides[d] = { a: (this.hwOf(a, bridge) + this.hwOf(b, bridge)) / 2, sw: (this.swOf(a, bridge) + this.swOf(b, bridge)) / 2, ch: (a.ch + b.ch) / 2, conn: false };
+      sides[d] = { a: (this.hwOf(a, bridge) + this.hwOf(b, bridge)) / 2, sw: (this.swOf(a, bridge) + this.swOf(b, bridge)) / 2, ch: (a.ch + b.ch) / 2, f: bridge ? 0 : (a.fringe + b.fringe) / 2, conn: false };
     }
     // embedded tram tracks between tram arms
     const tram = [0, 1, 2, 3].map((d) => !!arms[d] && this.typeToward(x, y, d, t) === RoadType.TramAvenue);
@@ -596,14 +621,13 @@ export class ChunkBuilder {
     const cAsph = code(own.kind, STYLE_JUNCTION, jf);
     const cCurb = code(Kind.Curb, 0, 0);
     const cSide = code(Kind.Sidewalk, STYLE_JUNCTION, 0);
-    const vergeKind = bridge ? Kind.Concrete : own.type === RoadType.Pedestrian ? Kind.Pavers : Kind.Grass;
-    const cVerge = code(vergeKind, rail ? RoadType.Rail : STYLE_JUNCTION, 0);
+    const cVerge = code(Kind.Concrete, STYLE_JUNCTION, 0);
     const carLift = rail ? BALLAST_TOP : ROAD;
-    const P = (p: V2, lift: number, c: number): number => {
+    const P = (p: V2, lift: number, c: number, s = 0, hw = 8): number => {
       fr.w(p.u, p.v);
       const X = fr.X, Z = fr.Z;
       const nn = fr.normal(X, Z);
-      return buf.vtx(X, fr.base(X, Z) + lift, Z, nn.x, nn.y, nn.z, 0, 0, 8, c);
+      return buf.vtx(X, fr.base(X, Z) + lift, Z, nn.x, nn.y, nn.z, s, 0, hw, c);
     };
     // asphalt: fan from the center with a mid ring
     const bnd: V2[] = [];
@@ -612,10 +636,13 @@ export class ChunkBuilder {
     if (B.conn) bnd.push({ u: 16, v: 8 });
     const O = { u: 8, v: 8 };
     const o = P(O, carLift, cAsph);
+    const mid: V2 = { u: 0, v: 0 };
     let pr = -1, pm = -1;
     for (let i = 0; i < bnd.length; i++) {
       const b = bnd[i];
-      const m = P({ u: (O.u + b.u) / 2, v: (O.v + b.v) / 2 }, carLift, cAsph);
+      mid.u = (O.u + b.u) / 2;
+      mid.v = (O.v + b.v) / 2;
+      const m = P(mid, carLift, cAsph);
       const e = P(b, carLift, cAsph);
       if (i > 0) {
         buf.tri(o, pm, m, 0, 1, 0);
@@ -624,40 +651,30 @@ export class ChunkBuilder {
       pr = e;
       pm = m;
     }
-    // curb top + sidewalk bands
-    const band = (a: V2[], b: V2[], liftA: (i: number) => number, liftB: (i: number) => number, c: number) => {
+    // curb top + sidewalk bands (optional per-vertex s coordinates for the shader)
+    const band = (a: V2[], b: V2[], liftA: (i: number) => number, liftB: (i: number) => number, c: number, sB?: (i: number) => number) => {
       let pa = -1, pb = -1;
       for (let i = 0; i < a.length; i++) {
-        const ia = P(a[i], liftA(i), c), ib = P(b[i], liftB(i), c);
+        const ia = P(a[i], liftA(i), c, 0, sB ? 0 : 8), ib = P(b[i], liftB(i), c, sB ? sB(i) : 0, sB ? 0 : 8);
         if (i > 0) buf.quadUp(pa, ia, ib, pb);
         pa = ia;
         pb = ib;
       }
     };
-    const sideLift = (i: number) => ROAD + chAt(i);
     if (rail) {
-      // sloped ballast shoulders down to the verge
-      band(inner, outer, () => BALLAST_TOP, () => VERGE, code(Kind.Ballast, RoadType.Rail, 0));
-      if (fan) {
-        const K = P({ u: 16, v: 0 }, VERGE, cVerge);
-        let prev = -1;
-        for (let i = 0; i < outer.length; i++) {
-          const e = P(outer[i], VERGE, cVerge);
-          if (i > 0) buf.tri(K, prev, e, 0, 1, 0);
-          prev = e;
-        }
-      } else band(outer, vergeEdge, () => VERGE, () => VERGE, cVerge);
+      // sloped ballast shoulders down into the terrain
+      band(inner, outer, () => BALLAST_TOP, () => SINK, code(Kind.Ballast, RoadType.Rail, 0));
       return r;
     }
-    const vLift = bridge ? (i: number) => ROAD + chAt(i) : (A.sw + B.sw > 0.01 || A.ch + B.ch > 0.01) ? () => VERGE : () => ROAD;
+    const sideLift = (i: number) => ROAD + chAt(i);
     if (A.sw + B.sw > 0.01) {
       band(inner, ctop, sideLift, sideLift, cCurb);
       band(ctop, outer, sideLift, sideLift, cSide);
     }
-    // walls: curb faces toward the asphalt, sidewalk back faces toward the verge
-    const wall = (path: V2[], lo: (i: number) => number, hi: (i: number) => number, towardCenter: boolean, kind: Kind) => {
+    // walls: curb faces toward the asphalt; the outer edge drops into the terrain (lo = null)
+    const wall = (path: V2[], lo: ((i: number) => number) | null, hi: (i: number) => number, towardCenter: boolean, kind: Kind) => {
       const c = code(kind, 0, 0);
-      let pa = -1, pb = -1, pn: [number, number] = [0, 0];
+      let pa = -1, pb = -1, pnx = 0, pnz = 0;
       for (let i = 0; i < path.length; i++) {
         const p = path[i];
         const q0 = path[Math.max(0, i - 1)], q1 = path[Math.min(path.length - 1, i + 1)];
@@ -673,29 +690,43 @@ export class ChunkBuilder {
         const [nx, nz] = fr.dir(nu, nv);
         fr.w(p.u, p.v);
         const X = fr.X, Z = fr.Z, bh = fr.base(X, Z);
-        const l0 = lo(i), l1 = hi(i);
-        const ia = buf.vtx(X, bh + Math.min(l0, l1), Z, nx, 0, nz, 0, 0, 0, c);
-        const ib = buf.vtx(X, bh + Math.max(l0, l1), Z, nx, 0, nz, 0, 0, 0, c);
-        if (i > 0) buf.quad(pa, ia, ib, pb, (pn[0] + nx) / 2, 0, (pn[1] + nz) / 2);
+        const top = bh + hi(i);
+        const bot = lo ? bh + lo(i) : Math.min(fr.skirt(X, Z, bh), top - 0.02);
+        const ia = buf.vtx(X, Math.min(bot, top), Z, nx, 0, nz, 0, 0, 0, c);
+        const ib = buf.vtx(X, Math.max(bot, top), Z, nx, 0, nz, 0, 0, 0, c);
+        if (i > 0) buf.quad(pa, ia, ib, pb, (pnx + nx) / 2, 0, (pnz + nz) / 2);
         pa = ia;
         pb = ib;
-        pn = [nx, nz];
+        pnx = nx;
+        pnz = nz;
       }
     };
     if (A.ch + B.ch > 0.01) wall(inner, () => ROAD, sideLift, true, Kind.Curb);
-    if (!bridge && A.sw + B.sw > 0.01) wall(outer, (i) => vLift(i), sideLift, false, Kind.Curb);
-    // verge: fan from the cell corner or band to the closed edge
-    if (fan) {
-      const K = P({ u: 16, v: 0 }, vLift(np - 1), cVerge);
-      let prev = -1;
-      for (let i = 0; i < outer.length; i++) {
-        const e = P(outer[i], vLift(i), cVerge);
-        if (i > 0) buf.tri(K, prev, e, 0, 1, 0);
-        prev = e;
-      }
-    } else {
-      band(outer, vergeEdge, vLift, vLift, cVerge);
+    if (bridge) {
+      // deck surface out to the fascia: fan from the cell corner or band to the closed edge
+      const vLift = (i: number) => ROAD + chAt(i);
+      if (fan) {
+        const K = P({ u: 16, v: 0 }, vLift(np - 1), cVerge);
+        let prev = -1;
+        for (let i = 0; i < outer.length; i++) {
+          const e = P(outer[i], vLift(i), cVerge);
+          if (i > 0) buf.tri(K, prev, e, 0, 1, 0);
+          prev = e;
+        }
+      } else band(outer, vergeEdge, vLift, vLift, cVerge);
+      return r;
     }
+    if (A.f + B.f > 0.01) {
+      // unpaved: a ragged gravel fringe sloping into the terrain
+      const ow = (S: SideInfo) => S.sw + S.f;
+      const edge = fan
+        ? this.fillet(8 + A.a + ow(A), 8 - B.a - ow(B), Math.max(0, r - Math.max(ow(A), ow(B))), n)
+        : A.conn
+          ? [{ u: 8 + A.a + ow(A), v: 0 }, { u: 8 + B.a + ow(B), v: 8 }]
+          : [{ u: 8, v: 8 - A.a - ow(A) }, { u: 16, v: 8 - B.a - ow(B) }];
+      const fAt = (i: number) => A.f + (B.f - A.f) * (np > 1 ? i / (np - 1) : 0);
+      band(outer, edge, sideLift, () => SINK, code(Kind.Gravel, RoadType.Dirt, 0), fAt);
+    } else wall(outer, null, sideLift, false, Kind.Concrete);
     return r;
   }
 
@@ -786,7 +817,7 @@ export class ChunkBuilder {
     this.fb.add(FT.LampPole, X, y, Z, yaw);
     const hx = X + dx * 1.75, hz = Z + dz * 1.75;
     this.fb.glow(hx, y + 7.3, hz, 1.6);
-    this.pool(hx, hz, own.hw > 5 ? 9.5 : 8, 1);
+    this.pool(hx, hz, own.hw > 5 ? 12 : 11, 1);
   }
 
   private lampDouble(u: number, v: number, lift: number, du: number, dv: number, own: Profile): void {
@@ -800,7 +831,7 @@ export class ChunkBuilder {
       const hx = X + dx * 2.05 * s, hz = Z + dz * 2.05 * s;
       this.fb.glow(hx, y + 8.6, hz, 1.8);
       const off = own.type === RoadType.Highway ? 3.6 : 3.4;
-      this.pool(X + dx * off * s, Z + dz * off * s, 9.5, 1);
+      this.pool(X + dx * off * s, Z + dz * off * s, 13, 1);
     }
   }
 
@@ -811,7 +842,7 @@ export class ChunkBuilder {
     const y = fr.base(X, Z) + ROAD;
     this.fb.add(FT.LampPed, X, y, Z, 0);
     this.fb.glow(X, y + 3.93, Z, 1.0);
-    this.pool(X, Z, 5.5, 0.85);
+    this.pool(X, Z, 6.5, 0.9);
   }
 
   private pool(wx: number, wz: number, radius: number, strength: number): void {
@@ -1026,17 +1057,12 @@ export class ChunkBuilder {
         rows.push({ tau, b: [-e, -4.6, 4.6, e], la: [BALLAST_TOP + 0.35, BALLAST_TOP, BALLAST_TOP + 0.35], lb: [BALLAST_TOP + 0.35, BALLAST_TOP, BALLAST_TOP + 0.35], hw: own.hw, mask: 0xffff });
         continue;
       }
-      let eo = 8;
-      if (curved) {
-        const th = (i / n) * HALF_PI;
-        eo = Math.min(16 / Math.max(1e-6, Math.cos(th)), 16 / Math.max(1e-6, Math.sin(th))) - 8;
-      }
       const bt = own.ballast;
       rows.push({
         tau,
-        b: [-8, -own.hw, -bt, bt, own.hw, eo],
-        la: [VERGE, VERGE, BALLAST_TOP, BALLAST_TOP, VERGE],
-        lb: [VERGE, BALLAST_TOP, BALLAST_TOP, VERGE, VERGE],
+        b: [-own.hw, -own.hw, -bt, bt, own.hw, own.hw],
+        la: [SINK, SINK, BALLAST_TOP, BALLAST_TOP, SINK],
+        lb: [SINK, BALLAST_TOP, BALLAST_TOP, SINK, SINK],
         hw: own.hw,
         mask: 0xffff,
       });
@@ -1070,7 +1096,7 @@ export class ChunkBuilder {
     }
     const pflags = painted ? jf | MF.Tracks : 0;
     if (!bridge) {
-      const sides: SideInfo[] = arm.map((c) => ({ a: own.ballast, sw: own.hw - own.ballast, ch: 0, conn: c }));
+      const sides: SideInfo[] = arm.map((c) => ({ a: own.ballast, sw: own.hw - own.ballast, ch: 0, f: 0, conn: c }));
       for (let q = 0; q < 4; q++) {
         fr.set(x, y, q);
         this.quadrant(own, sides[q], sides[(q + 1) & 3], pflags, false, true);
@@ -1087,7 +1113,7 @@ export class ChunkBuilder {
           ids.push(buf.vtx(fr.X, fr.base(fr.X, fr.Z) + BALLAST_TOP, fr.Z, nn.x, nn.y, nn.z, 0, 0, 8, c));
         }
       for (let j = 0; j < G; j++) for (let i = 0; i < G; i++) buf.quadUp(ids[j * (G + 1) + i], ids[j * (G + 1) + i + 1], ids[(j + 1) * (G + 1) + i + 1], ids[(j + 1) * (G + 1) + i]);
-      this.bridgeJunctionShell(x, y, [0, 1, 2, 3].map((d) => ({ a: 4.6, sw: 0, ch: BALLAST_TOP - ROAD, conn: arm[d] })));
+      this.bridgeJunctionShell(x, y, [0, 1, 2, 3].map((d) => ({ a: 4.6, sw: 0, ch: BALLAST_TOP - ROAD, f: 0, conn: arm[d] })));
     }
     if (painted) return;
     fr.set(x, y, 0);

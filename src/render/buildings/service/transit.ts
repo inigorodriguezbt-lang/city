@@ -1,9 +1,10 @@
 // Public transport: depots, stations, ports and airports.
 import * as THREE from 'three';
-import { Kit, type P2 } from './kit';
+import { Kit, type P2, type V3 } from './kit';
 import { C, shade, mix, lawnColor, civicLook } from './colors';
 import { models } from './define';
-import { airplane, bench, boat, bus, car, container, containerShip, containerStack, crowd, fence, helicopter, parkedCars, parkingLot, person, railCar, taxi, tree, themeTree, trashBin, truck, van } from './props';
+import { airplane, bench, boat, bus, car, container, containerShip, containerStack, crowd, fence, helicopter, lampPost, parkedCars, parkingLot, person, railCar, taxi, tree, themeTree, trashBin, truck, van } from './props';
+import { hashString } from '../../../core/rng';
 import { antennaMast, clockFace, civicBlock, hall, hangar, lampsAlong, quay, rollDoors, archWindow } from './arch';
 
 // ── shared transit parts ───────────────────────────────────────────────────
@@ -140,26 +141,36 @@ const M: Record<string, (k: Kit) => number> = {
     k.box('metal', 0, 2.6, -2, 12, 0.15, 5, 0x6a8a3a, { top: 'solar', bottom: true });
     for (const x of [-5.5, 5.5]) k.cyl('metal', x, 0, -2, 0.1, 0.1, 2.6, 0x3a3d42, 6);
     const cols = [0x3fa05a, 0x3fa05a, 0x2f7fd0];
-    for (let i = 0; i < 9; i++) {
-      const x = -5 + i * 1.25;
-      k.box('metal', x, 0, -3.2, 0.2, 1.1, 0.3, 0x3a3d42);
-      k.at(x, 0, -2.3, Math.PI / 2, () => {
+    const dockedBike = (x: number, z: number, col: number) => {
+      k.box('metal', x, 0, z - 0.9, 0.2, 1.1, 0.3, 0x3a3d42);
+      k.box('emissive', x, 0.85, z - 0.74, 0.12, 0.12, 0.02, 0x7fe07f);
+      k.at(x, 0, z, Math.PI / 2, () => {
         for (const s of [-0.55, 0.55]) {
           k.push(new THREE.Matrix4().makeTranslation(s, 0.35, 0).multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2)));
-          k.torus('metal', 0, 0, 0, 0.33, 0.035, 0x222222, 10, 3);
+          k.torus('metal', 0, 0, 0, 0.33, 0.035, 0x222222, k.lo ? 6 : 10, 3);
           k.pop();
         }
-        k.beam('metal', [-0.55, 0.35, 0], [0.15, 0.85, 0], 0.06, 0.06, cols[i % 3]);
-        k.beam('metal', [0.55, 0.35, 0], [0.15, 0.85, 0], 0.06, 0.06, cols[i % 3]);
+        k.beam('metal', [-0.55, 0.35, 0], [0.15, 0.85, 0], 0.06, 0.06, col);
+        k.beam('metal', [0.55, 0.35, 0], [0.15, 0.85, 0], 0.06, 0.06, col);
+        k.beam('metal', [-0.05, 0.36, 0], [0.4, 0.95, 0], 0.06, 0.06, col);
         k.beam('metal', [0.15, 0.85, 0], [0.45, 1.0, 0], 0.05, 0.05, 0x222222);
+        k.box('plain', -0.1, 0.92, 0, 0.26, 0.06, 0.12, 0x1e2023);
+        k.box('metal', 0.45, 1.0, 0, 0.05, 0.05, 0.56, 0x222222);
+        k.box('plain', 0.62, 0.72, 0, 0.26, 0.2, 0.34, col);
       });
-    }
+    };
+    // covered row under the solar canopy + an open row facing the street
+    for (let i = 0; i < 9; i++) dockedBike(-5 + i * 1.25, -2.3, cols[i % 3]);
+    for (let i = 0; i < 6; i++) if (i !== 2) dockedBike(-5.5 + i * 1.25, 2.6, cols[(i + 1) % 3]);
     k.box('metal', 5.8, 0, 3, 1.2, 2.2, 0.6, 0x3fa05a);
     k.box('emissive', 5.8, 1.2, 3.31, 0.8, 0.6, 0.02, 0xbfe8ff);
     k.light(5.8, 1.6, 3.6, 0x9fe0ff, 1.8, 'neon');
-    person(k, 3, 4, 0x3a6fd8, 1);
-    tree(k, themeTree(k.ctx, 'shade'), -5.5, 5, 0.6);
-    trashBin(k, 1, 5.5);
+    lampPost(k, -7, 0.4, 4.4, 0x2a2e33, C.lampCool, 'modern');
+    k.light(0, 2.3, -2, 0xeaf4ff, 5, 'lamp');
+    person(k, 3.4, 5, 0x3a6fd8, 1);
+    person(k, -3, 4.2, 0xd8412f, 2.6);
+    tree(k, themeTree(k.ctx, 'shade'), -6, 6.2, 0.6);
+    trashBin(k, 1.5, 5.8);
     return 4;
   },
 
@@ -187,33 +198,64 @@ const M: Record<string, (k: Kit) => number> = {
   },
 
   metro_station(k) {
-    const W = k.W, D = k.D;
+    const D = k.D;
+    // the network's brand colour is consistent across a city (keyed by style)
+    const brand = [0xd8272f, 0x1f5fbf, 0x0f8a4a, 0xe8a200][(hashString(k.ctx.style.id) >>> 0) % 4];
     k.lot('paving', 0xd0cabd, 0.2, 0.05);
-    // glass entrance pavilion over the stairs, with the big "M" totem
-    const px = -3, pz = 2;
-    k.box('concrete', px, 0, pz, 14, 0.3, 10, 0xb8b4aa);
-    k.box('plain', px, -0.5, pz + 0.5, 5, 0.6, 7, 0x1e2024, { top: 'plain', topColor: 0x2a2d31 });
-    for (let i = 0; i < 8; i++) k.box('concrete', px, 0.3 - (i + 1) * 0.1, pz + 3.8 - i * 0.9, 4.4, 0.08, 0.9, 0x9a968d);
-    k.box('glass', px, 0.3, pz - 3.5, 12, 3.8, 0.1, 0x9fc4d8, { top: false });
-    for (const s of [-1, 1]) k.box('glass', px + s * 6, 0.3, pz, 0.1, 3.8, 7, 0x9fc4d8, { top: false });
-    k.box('metal', px, 4.1, pz, 14.4, 0.35, 10.4, 0xd8dcdf, { bottom: true, top: 'roof_metal', topColor: 0xc8ccd0 });
-    k.light(px, 3.6, pz, 0xeaf4ff, 7, 'lamp');
-    // totem with M sign
-    const tx = 8, tz = 9;
-    k.box('metal', tx, 0, tz, 0.5, 5.2, 0.5, 0x3a3d42);
-    k.box('emissive', tx, 5.2, tz, 2.2, 2.2, 0.5, 0xf4f4f4);
-    k.box('emissive', tx, 5.2, tz, 2.3, 2.3, 0.45, 0xd8272f);
-    k.glyph('M', tx, 5.55, tz + 0.27, 1.5, 0xf4f4f4, 'emissive');
-    k.glyph('M', tx, 5.55, tz - 0.27, 1.5, 0xf4f4f4, 'emissive');
-    k.light(tx, 6.3, tz + 0.6, 0xff4040, 4, 'neon');
-    // vent shaft, bike racks, trees, benches
-    k.box('concrete', 9, 0, -9, 5, 2.2, 4, 0xb8b4aa, { top: 'metal', topColor: 0x5a5e62 });
-    for (let i = 0; i < 5; i++) k.torus('metal', -12 + i * 1.2, 0.5, -10, 0.45, 0.04, 0x666666, 8, 3);
-    tree(k, themeTree(k.ctx, 'formal'), -11, 10, 0.7);
-    tree(k, themeTree(k.ctx, 'formal'), -11, -3, 0.7, 1, 1);
-    bench(k, 5, -2, -Math.PI / 2);
-    crowd(k, 0, 6, 20, 8, 10);
-    return 7.4;
+    // curved glass "shell" entrance over the escalators, sinking into the plaza
+    const ex = -7, ez = 7, R = 2.8, slope = 0.42, L = R / slope;
+    const axis = (s: number): [number, number] => [ez - s, -s * slope];
+    k.flat('plain', ex, ez - L / 2, R * 2 - 0.3, L, 0.075, 0x1c1e22);
+    for (let s = 0.4; s < L; s += 0.55) k.paint(ex - R + 0.4, ez - s, ex + R - 0.4, ez - s, 0.12, 0.085, 0x9a968d);
+    k.box('metal', ex, 0.05, ez - L / 2, 0.12, 0.9, L, 0x8a8e92);
+    k.surface('glass', k.seg(14), 4, (a, v) => {
+      const [z, y] = axis(v * L);
+      const th = Math.PI * a;
+      return [ex + R * Math.cos(th), Math.max(0.02, y + R * Math.sin(th)), z];
+    }, 0xa8cce0, true);
+    for (const s of [0, 1.5, 3, 4.5]) {
+      const [z, y] = axis(s);
+      const pts: V3[] = [];
+      for (let i = 0; i <= 10; i++) {
+        const th = (Math.PI * i) / 10;
+        const py = y + R * Math.sin(th);
+        if (py > 0) pts.push([ex + R * Math.cos(th), py, z]);
+      }
+      if (pts.length > 1) k.polyPipe('metal', pts, s === 0 ? 0.12 : 0.07, 0xdadee2, 5);
+    }
+    k.light(ex, 2.2, ez - 1.5, 0xeaf4ff, 5, 'lamp');
+    // ticket hall pavilion with a cantilevered roof and METRO fascia
+    const hx = 5, hz = -6;
+    k.box('wall_glass', hx, 0.1, hz, 16, 4.4, 11, 0xbcd6e4, { top: false });
+    k.box('concrete', hx, 0, hz, 17, 0.12, 12, 0xb8b4aa);
+    k.box('metal', hx, 4.5, hz + 1, 20, 1.1, 15, 0xe4e6e8, { bottom: true, top: 'roof_metal', topColor: 0xb8bcc0 });
+    k.box('plain', hx, 4.6, hz + 8.55, 7.4, 0.9, 0.06, brand, { top: false });
+    k.word('METRO', hx, 4.72, hz + 8.6, 0.62, 0xfafafa, 'emissive', 0.05);
+    for (const sx of [-9, 9]) k.box('metal', hx + sx, 0, hz + 7.8, 0.3, 4.5, 0.3, 0x5a6168);
+    k.entrance(hx, hz + 5.5, 4, 2.8, false, 0x3a3d42);
+    for (let i = 0; i < 3; i++) k.light(hx - 5 + i * 5, 4.3, hz + 7.5, 0xeaf4ff, 3.4, 'lamp');
+    // cube totem with the "M" on every face
+    const tx = 12, tz = 11.5;
+    k.box('metal', tx, 0, tz, 0.55, 6.4, 0.55, C.gunmetal);
+    k.box('emissive', tx, 6.4, tz, 2.6, 2.6, 2.6, brand);
+    for (let f = 0; f < 4; f++) k.at(tx, 0, tz, (f * Math.PI) / 2, () => k.glyph('M', 0, 6.85, 1.31, 1.7, 0xfafafa, 'emissive', 0.05));
+    k.light(tx, 7.7, tz, brand, 6, 'neon');
+    // ventilation shaft, bike racks, planters, benches, lamps
+    k.box('concrete', -10, 0, -10, 6, 1.6, 4, 0xb8b4aa, { top: 'metal', topColor: 0x4a4e52 });
+    for (let i = 0; i < 6; i++) {
+      const bx = -13.5 + i * 1.1, bz = -3.5;
+      k.polyPipe('metal', [[bx, 0, bz - 0.4], [bx, 0.8, bz - 0.4], [bx, 0.8, bz + 0.4], [bx, 0, bz + 0.4]], 0.04, 0x8a8e92, 4);
+    }
+    for (const [x, z] of [[-13, 12.5], [2, 12.5], [-1, -13]] as P2[]) {
+      k.box('concrete', x, 0, z, 2.6, 0.6, 2.6, 0xa8a49c, { top: 'dirt', topColor: 0x5a4a38 });
+      k.at(0, 0.6, 0, 0, () => tree(k, themeTree(k.ctx, 'formal'), x, z, 0.62, 0.5));
+    }
+    bench(k, -2, 9.5, 0);
+    bench(k, 6, 9.5, 0);
+    lampPost(k, -1, 13.5, 4.6, 0x2a2e33, C.lampCool, 'modern');
+    lampPost(k, 8, 13.5, 4.6, 0x2a2e33, C.lampCool, 'modern');
+    crowd(k, 0, 7, 22, 8, 12);
+    return 9.1;
   },
 
   train_station(k) {

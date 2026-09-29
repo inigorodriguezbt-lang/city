@@ -2,7 +2,7 @@
 // touch an access road. One dense list per demand category allows O(1) random
 // sampling; membership updates are O(1). Changes are picked up by rescanning
 // dirty chunks under a per-tick budget so big edits never stall a frame.
-import { CHUNK, MAX_LOT_SLOPE } from '../core/constants';
+import { CELL, CHUNK, MAX_LOT_SLOPE } from '../core/constants';
 import { DIR_DX, DIR_DY, RoadType, ZoneType, type Rect, type ZoneCategory } from '../core/types';
 import type { RNG } from '../core/rng';
 import { zoneDef } from '../data/zones';
@@ -27,6 +27,14 @@ export function isAccessRoad(t: number): boolean {
   return t !== RoadType.None && t !== RoadType.Rail && t !== RoadType.Highway;
 }
 
+/** (max - min) / CELL of a cell's corner heights, without allocating. */
+function cellSlope(w: World, x: number, y: number): number {
+  const s1 = w.size + 1, h = w.heights, i = y * s1 + x;
+  const a = h[i], b = h[i + 1], c = h[i + s1], d = h[i + s1 + 1];
+  const lo = Math.min(a, b, c, d), hi = Math.max(a, b, c, d);
+  return (hi - lo) / CELL;
+}
+
 export class CandidateSet {
   private readonly size: number;
   private readonly pos: Int32Array;
@@ -41,6 +49,11 @@ export class CandidateSet {
   private readonly unfit: Int32Array;
   /** zone the cell had when it was found unfit (a repaint gives it a new chance) */
   private readonly unfitZone: Uint8Array;
+  /** cells currently marked unfit (checked daily for expiry) */
+  private unfitCells: number[] = [];
+  /** zone / road layers as of the last sync: edits are found by comparing against them */
+  private readonly shadowZone: Uint8Array;
+  private readonly shadowRoad: Uint8Array;
 
   constructor(private world: World) {
     this.size = world.size;
@@ -51,6 +64,8 @@ export class CandidateSet {
     this.dirty = new Uint8Array(this.chunksX * this.chunksX);
     this.unfit = new Int32Array(n);
     this.unfitZone = new Uint8Array(n);
+    this.shadowZone = new Uint8Array(n);
+    this.shadowRoad = new Uint8Array(n);
   }
 
   private get today(): number {
@@ -63,8 +78,69 @@ export class CandidateSet {
    */
   markUnfit(i: number, days: number): void {
     this.remove(i);
+    if (this.unfit[i] === 0) this.unfitCells.push(i);
     this.unfit[i] = this.today + days;
     this.unfitZone[i] = this.world.zone[i];
+  }
+
+  /** Daily: cells whose "unfit" period ran out get re-evaluated. */
+  expireUnfit(): void {
+    const today = this.today, list = this.unfitCells, s = this.size;
+    let n = 0;
+    for (let k = 0; k < list.length; k++) {
+      const i = list[k];
+      const until = this.unfit[i];
+      if (until === 0) continue; // cleared by a nearby change (already re-evaluated)
+      if (until > today) {
+        list[n++] = i;
+        continue;
+      }
+      this.unfit[i] = 0;
+      this.refreshCell(i % s, (i / s) | 0);
+    }
+    list.length = n;
+  }
+
+  /**
+   * Something changed in `r` (a building was demolished, a road was built): cells
+   * within a lot's reach lose their "unfit" mark and are re-evaluated right away.
+   */
+  retryAround(r: Rect, reach = 4): void {
+    const s = this.size;
+    const x0 = Math.max(0, r.x0 - reach), y0 = Math.max(0, r.y0 - reach);
+    const x1 = Math.min(s - 1, r.x1 + reach), y1 = Math.min(s - 1, r.y1 + reach);
+    const zone = this.world.zone;
+    for (let y = y0; y <= y1; y++) {
+      let i = y * s + x0;
+      for (let x = x0; x <= x1; x++, i++) {
+        if (this.unfit[i]) this.unfit[i] = 0;
+        if (zone[i] || this.cat[i] >= 0) this.refreshCell(x, y);
+      }
+    }
+  }
+
+  /**
+   * Pick up zone / road edits inside `r` by comparing the layers with their shadow
+   * copies: only cells that really changed are re-evaluated (a building spawning
+   * also flags the zone layer, which must not trigger rescans). Road edits also
+   * re-evaluate the neighbours that gain or lose access and give nearby unfit cells
+   * another chance.
+   */
+  syncRect(r: Rect): void {
+    const s = this.size, w = this.world, zone = w.zone, road = w.road, sz = this.shadowZone, sr = this.shadowRoad;
+    const x0 = Math.max(0, r.x0), y0 = Math.max(0, r.y0), x1 = Math.min(s - 1, r.x1), y1 = Math.min(s - 1, r.y1);
+    for (let y = y0; y <= y1; y++) {
+      let i = y * s + x0;
+      for (let x = x0; x <= x1; x++, i++) {
+        const z = zone[i], t = road[i];
+        if (z === sz[i] && t === sr[i]) continue;
+        const roadChanged = t !== sr[i];
+        sz[i] = z;
+        sr[i] = t;
+        if (roadChanged) this.retryAround({ x0: x, y0: y, x1: x, y1: y });
+        else this.refreshCell(x, y);
+      }
+    }
   }
 
   count(c: number): number {
@@ -94,7 +170,7 @@ export class CandidateSet {
       }
     }
     if (!access) return -1;
-    if (w.cellSlope(x, y) > MAX_LOT_SLOPE) return -1;
+    if (cellSlope(w, x, y) > MAX_LOT_SLOPE) return -1;
     if (w.isWater(x, y)) return -1;
     return c;
   }
@@ -143,6 +219,9 @@ export class CandidateSet {
 
   fullScan(): void {
     this.unfit.fill(0);
+    this.unfitCells = [];
+    this.shadowZone.set(this.world.zone);
+    this.shadowRoad.set(this.world.road);
     for (let c = 0; c < 4; c++) this.lens[c] = 0;
     this.pos.fill(-1);
     this.cat.fill(-1);
@@ -163,6 +242,7 @@ export class CandidateSet {
    */
   markRect(r: Rect, pad = 1, retryUnfit = false): void {
     if (retryUnfit) {
+      // cleared marks are dropped from unfitCells lazily (expireUnfit skips zeros)
       const reach = 4;
       const ux0 = Math.max(0, r.x0 - reach), uy0 = Math.max(0, r.y0 - reach);
       const ux1 = Math.min(this.size - 1, r.x1 + reach), uy1 = Math.min(this.size - 1, r.y1 + reach);
@@ -194,7 +274,15 @@ export class CandidateSet {
       const cx = k % this.chunksX, cy = (k / this.chunksX) | 0;
       const x0 = cx * CHUNK, y0 = cy * CHUNK;
       const x1 = Math.min(this.size, x0 + CHUNK), y1 = Math.min(this.size, y0 + CHUNK);
-      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) this.refreshCell(x, y);
+      const w = this.world, s = this.size;
+      for (let y = y0; y < y1; y++) {
+        for (let x = x0; x < x1; x++) {
+          const i = y * s + x;
+          this.shadowZone[i] = w.zone[i];
+          this.shadowRoad[i] = w.road[i];
+          this.refreshCell(x, y);
+        }
+      }
     }
     if (this.qHead >= this.queue.length && this.qHead > 0) {
       this.queue = [];

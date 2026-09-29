@@ -22,7 +22,7 @@ const fs = require('fs');
     await page.waitForFunction(() => window.__ready === true, null, { timeout: 180000, polling: 300 });
     const data = await page.evaluate(() => {
       const sb = window.__sb;
-      sb.renderer.render(sb.scene, sb.camera);
+      sb.render();
       return sb.renderer.domElement.toDataURL('image/png');
     });
     fs.writeFileSync(out, Buffer.from(data.split(',')[1], 'base64'));

@@ -8,7 +8,7 @@ import { POLICIES } from '../data/policies';
 import type { SimContext } from './context';
 import { cheapestUnlocked, unlockedAt } from './catalog';
 import { LevelBlock } from './lifecycle';
-import { ADVISOR_MIN_GAP } from './tuning';
+import { ADVISOR_INFO_EXTRA_GAP, ADVISOR_MIN_GAP, ADVISOR_URGENT_GAP } from './tuning';
 
 export interface AdvisorTip {
   key: string;
@@ -30,11 +30,13 @@ export class Advisor {
   daily(): void {
     const ctx = this.ctx, st = ctx.state.advisor, day = ctx.day;
     if (ctx.fastForward || !ctx.settings.gameplay.advisor || !ctx.lastValid) return;
-    if (day < st.next) return;
+    // urgent problems may cut in line (but never right after another notice)
+    if (day < st.next && day < (st.last ?? -99) + ADVISOR_URGENT_GAP) return;
     const tips = this.evaluate().filter((t) => (st.cd[t.key] ?? -1) <= day);
     if (!tips.length) return;
     tips.sort((a, b) => b.priority - a.priority);
     const t = tips[0];
+    if (day < st.next && t.kind !== 'danger') return;
     const target = t.target;
     ctx.world.notify({
       kind: t.kind,
@@ -47,7 +49,8 @@ export class Advisor {
     });
     st.cd[t.key] = day + t.cooldown;
     if (t.key.startsWith('unlock_')) ctx.state.hintedMilestone = ctx.world.milestone;
-    st.next = day + ADVISOR_MIN_GAP + (t.kind === 'info' ? 2 : 0);
+    st.last = day;
+    st.next = day + ADVISOR_MIN_GAP + (t.kind === 'info' || t.kind === 'good' ? ADVISOR_INFO_EXTRA_GAP : 0);
     if (t.kind === 'danger' || t.kind === 'warning') {
       try { ctx.game.audio.play(t.kind === 'danger' ? 'warning' : 'notice', 0.6); } catch { /* audio optional */ }
     }

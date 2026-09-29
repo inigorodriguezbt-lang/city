@@ -2,7 +2,7 @@
 // markings) and — through `laneOffsets` — by anything that needs to place
 // vehicles or props on a lane. All distances are meters measured laterally
 // from the road center line. A cell is 16 m wide, so every profile satisfies
-// hw + sw <= 8.
+// hw + sw + fringe <= 8.
 import { RoadType } from '../../core/types';
 
 /** Surface kinds understood by the road material shader (fits in 4 bits). */
@@ -74,19 +74,21 @@ export interface Profile {
   tracks: number[];
   /** car-carrying road (for signals, crosswalks) */
   cars: boolean;
+  /** width of the ragged unpaved fringe that blends the surface into the terrain (gravel) */
+  fringe: number;
 }
 
 const CURB = 0.16; // SIDEWALK_LIFT - ROAD_LIFT
 
 function P(p: Partial<Profile> & Pick<Profile, 'type' | 'rank' | 'hw'>): Profile {
   return {
-    sw: 0, ch: 0, kind: Kind.Asphalt, median: 0, barrier: false, radius: 3, lamps: false, ballast: 0, tracks: [], cars: true,
+    sw: 0, ch: 0, kind: Kind.Asphalt, median: 0, barrier: false, radius: 3, lamps: false, ballast: 0, tracks: [], cars: true, fringe: 0,
     ...p,
   };
 }
 
 export const PROFILES: Profile[] = [];
-PROFILES[RoadType.Dirt] = P({ type: RoadType.Dirt, rank: 1, hw: 3.5, kind: Kind.Gravel, radius: 2.5 });
+PROFILES[RoadType.Dirt] = P({ type: RoadType.Dirt, rank: 1, hw: 3.3, kind: Kind.Gravel, radius: 2.5, fringe: 1.1 });
 PROFILES[RoadType.Street] = P({ type: RoadType.Street, rank: 2, hw: 4.25, sw: 1.75, ch: CURB, radius: 3.2, lamps: true });
 PROFILES[RoadType.Avenue] = P({ type: RoadType.Avenue, rank: 3, hw: 5.75, sw: 2.25, ch: CURB, radius: 3.5, lamps: true });
 PROFILES[RoadType.TramAvenue] = P({ type: RoadType.TramAvenue, rank: 3, hw: 5.75, sw: 2.25, ch: CURB, radius: 3.5, lamps: true, tracks: [-1.53, 1.53] });

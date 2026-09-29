@@ -1,7 +1,11 @@
 // GPU-side copies of the terrain for per-pixel shading, water depth and overlays.
 //
+//  visH  (size+1)^2 *rendered* vertex heights: the true heights, except that
+//        free shoreline vertices (no road / lot / building next to them) are
+//        smoothed so rivers and coasts carved on the cell grid do not show
+//        stair-stepped banks. Everything render-core draws uses visH.
 //  hTex  RGBA32F (size+1)^2, one texel per terrain vertex (texelFetch only):
-//        R = vertex height (m)
+//        R = rendered vertex height (m)
 //        G = water surface level of the nearest water cell within 8 cells (raw
 //            world.water value, flood offset applied in shaders), -1000 = none
 //        B = distance to the nearest water cell (m, 0..136, 200 = far)
@@ -20,6 +24,8 @@ const NO_WATER = -1000;
 export class TerrainData {
   readonly n: number;
   readonly hData: Float32Array;
+  /** rendered vertex heights (see header) */
+  readonly visH: Float32Array;
   readonly nData: Uint8Array;
   readonly hTex: THREE.DataTexture;
   readonly nTex: THREE.DataTexture;
@@ -33,6 +39,7 @@ export class TerrainData {
     const n = world.size + 1;
     this.n = n;
     this.hData = new Float32Array(n * n * 4);
+    this.visH = new Float32Array(world.heights);
     this.nData = new Uint8Array(n * n * 4);
     this.cellLevel = new Float32Array(world.size * world.size);
     this.cellDist = new Uint8Array(world.size * world.size);
@@ -61,16 +68,18 @@ export class TerrainData {
     const ux0 = full ? 0 : Math.max(0, r.x0 - pad), uy0 = full ? 0 : Math.max(0, r.y0 - pad);
     const ux1 = full ? s - 1 : Math.min(s - 1, r.x1 + pad), uy1 = full ? s - 1 : Math.min(s - 1, r.y1 + pad);
     this.waterProximity(wx0, wy0, wx1, wy1, ux0, uy0, ux1, uy1);
-    // 2. per-vertex data for vertices touching the updated cells (+1 for normals)
+    // 2. rendered heights, then per-vertex data for vertices touching the
+    //    updated cells (+1 for normals)
     const vx0 = Math.max(0, ux0 - 1), vy0 = Math.max(0, uy0 - 1);
     const vx1 = Math.min(s, ux1 + 2), vy1 = Math.min(s, uy1 + 2);
+    this.computeVisual(vx0, vy0, vx1, vy1);
     this.writeVertices(vx0, vy0, vx1, vy1);
     // 3. upload
     if (full) {
       this.hTex.needsUpdate = true;
       this.nTex.needsUpdate = true;
       let mn = Infinity, mx = -Infinity;
-      for (const h of w.heights) {
+      for (const h of this.visH) {
         if (h < mn) mn = h;
         if (h > mx) mx = h;
       }
@@ -88,7 +97,7 @@ export class TerrainData {
       this.nTex.needsUpdate = true;
       for (let vy = vy0; vy <= vy1; vy++)
         for (let vx = vx0; vx <= vx1; vx++) {
-          const h = w.heights[vy * n + vx];
+          const h = this.visH[vy * n + vx];
           if (h > this.maxHeight) this.maxHeight = h;
           if (h < this.minHeight) this.minHeight = h;
         }
@@ -143,7 +152,7 @@ export class TerrainData {
     const w = this.world;
     const s = w.size, n = this.n;
     const hd = this.hData, nd = this.nData;
-    const heights = w.heights;
+    const heights = this.visH;
     const forest = w.fields.forest, fert = w.fields.fertility;
     const hv = (x: number, y: number) => heights[(y < 0 ? 0 : y > s ? s : y) * n + (x < 0 ? 0 : x > s ? s : x)];
     for (let vy = vy0; vy <= vy1; vy++)
@@ -185,6 +194,115 @@ export class TerrainData {
         nd[o + 2] = Math.max(0, Math.min(255, Math.round((0.5 + lap * 6) * 255)));
         nd[o + 3] = this.canopyAt(vx, vy);
       }
+  }
+
+  /**
+   * Recompute rendered heights for vertices in [vx0..vx1]×[vy0..vy1].
+   * Shoreline vertices (touching both wet and dry cells) take a 5×5 binomial
+   * blur of the true heights, their neighbours half of it, so the waterline
+   * follows a smooth curve instead of the cell staircase. Vertices next to a
+   * road, zoned lot or building keep their true height (things sit on them).
+   * Returns true when any rendered height changed.
+   */
+  private computeVisual(vx0: number, vy0: number, vx1: number, vy1: number): boolean {
+    const w = this.world;
+    const s = w.size, n = this.n;
+    const H = w.heights, V = this.visH;
+    // shoreline classification over the window + 1 (neighbour weights)
+    const ax0 = Math.max(0, vx0 - 1), ay0 = Math.max(0, vy0 - 1), ax1 = Math.min(s, vx1 + 1), ay1 = Math.min(s, vy1 + 1);
+    const AW = ax1 - ax0 + 1;
+    const shore = new Uint8Array(AW * (ay1 - ay0 + 1));
+    const wetCell = (x: number, y: number) => x >= 0 && y >= 0 && x < s && y < s && this.cellDist[y * s + x] === 0;
+    for (let vy = ay0; vy <= ay1; vy++)
+      for (let vx = ax0; vx <= ax1; vx++) {
+        let wet = 0, dry = 0;
+        for (let q = 0; q < 4; q++) {
+          const cx = vx - 1 + (q & 1), cy = vy - 1 + (q >> 1);
+          if (cx < 0 || cy < 0 || cx >= s || cy >= s) continue;
+          if (wetCell(cx, cy)) wet++;
+          else dry++;
+        }
+        if (wet && dry) shore[(vy - ay0) * AW + (vx - ax0)] = 1;
+      }
+    const K = [1, 4, 6, 4, 1];
+    let changed = false;
+    for (let vy = vy0; vy <= vy1; vy++)
+      for (let vx = vx0; vx <= vx1; vx++) {
+        const vi = vy * n + vx;
+        let wgt = 0;
+        if (shore[(vy - ay0) * AW + (vx - ax0)]) wgt = 1;
+        else {
+          for (let oy = -1; oy <= 1 && !wgt; oy++)
+            for (let ox = -1; ox <= 1; ox++) {
+              const xx = vx + ox, yy = vy + oy;
+              if (xx < ax0 || yy < ay0 || xx > ax1 || yy > ay1) continue;
+              if (shore[(yy - ay0) * AW + (xx - ax0)]) { wgt = 0.5; break; }
+            }
+        }
+        if (wgt > 0) {
+          // anything built on the adjacent cells pins the vertex
+          for (let q = 0; q < 4 && wgt > 0; q++) {
+            const cx = vx - 1 + (q & 1), cy = vy - 1 + (q >> 1);
+            if (cx < 0 || cy < 0 || cx >= s || cy >= s) continue;
+            const ci = cy * s + cx;
+            if (w.road[ci] || w.bldg[ci] || w.zone[ci]) wgt = 0;
+          }
+        }
+        let h = H[vi];
+        if (wgt > 0) {
+          let sum = 0, ws = 0;
+          for (let oy = -2; oy <= 2; oy++) {
+            const yy = vy + oy;
+            if (yy < 0 || yy > s) continue;
+            for (let ox = -2; ox <= 2; ox++) {
+              const xx = vx + ox;
+              if (xx < 0 || xx > s) continue;
+              const k = K[ox + 2] * K[oy + 2];
+              sum += H[yy * n + xx] * k;
+              ws += k;
+            }
+          }
+          h += (sum / ws - h) * wgt;
+        }
+        if (V[vi] !== h) {
+          V[vi] = h;
+          changed = true;
+        }
+      }
+    return changed;
+  }
+
+  /**
+   * Roads, lots or buildings changed inside `r`: re-pin / release shoreline
+   * vertices. Returns the vertex rect whose rendered heights changed, or null.
+   */
+  refreshVisual(r: Rect): Rect | null {
+    const s = this.world.size;
+    const vx0 = Math.max(0, r.x0 - 1), vy0 = Math.max(0, r.y0 - 1);
+    const vx1 = Math.min(s, r.x1 + 2), vy1 = Math.min(s, r.y1 + 2);
+    if (!this.computeVisual(vx0, vy0, vx1, vy1)) return null;
+    const wx0 = Math.max(0, vx0 - 1), wy0 = Math.max(0, vy0 - 1), wx1 = Math.min(s, vx1 + 1), wy1 = Math.min(s, vy1 + 1);
+    this.writeVertices(wx0, wy0, wx1, wy1);
+    const n = this.n;
+    for (let vy = wy0; vy <= wy1; vy++) {
+      const start = (vy * n + wx0) * 4, count = (wx1 - wx0 + 1) * 4;
+      this.hTex.addUpdateRange(start, count);
+      this.nTex.addUpdateRange(start, count);
+    }
+    this.hTex.needsUpdate = true;
+    this.nTex.needsUpdate = true;
+    return { x0: wx0, y0: wy0, x1: Math.min(s - 1, wx1), y1: Math.min(s - 1, wy1) };
+  }
+
+  /** rendered terrain height at world meters (bilinear over visH) */
+  heightAt(wx: number, wz: number): number {
+    const s = this.world.size, n = this.n;
+    const fx = Math.min(s, Math.max(0, wx / CELL)), fz = Math.min(s, Math.max(0, wz / CELL));
+    const x = Math.min(s - 1, Math.floor(fx)), z = Math.min(s - 1, Math.floor(fz));
+    const tx = fx - x, tz = fz - z;
+    const V = this.visH;
+    const h00 = V[z * n + x], h10 = V[z * n + x + 1], h01 = V[(z + 1) * n + x], h11 = V[(z + 1) * n + x + 1];
+    return (h00 * (1 - tx) + h10 * tx) * (1 - tz) + (h01 * (1 - tx) + h11 * tx) * tz;
   }
 
   /** mean tree density (0..255) of the up to 4 cells touching vertex (vx, vy) */

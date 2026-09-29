@@ -203,6 +203,7 @@ export class GameRenderer {
     const trees = (this.trees = new TreeRenderer(world, this.shared));
     trees.minHeight = terrain.minHeight;
     trees.maxHeight = terrain.maxHeight;
+    trees.groundAt = (wx, wz) => terrain.data.heightAt(wx, wz);
     this.overlays = new OverlayRenderer(world, this.shared, terrain);
     this.scene.add(terrain.group, water.group, trees.group);
     const ev = this.game.events;
@@ -353,7 +354,7 @@ export class GameRenderer {
       dc.b * kd + _CONIFER_CANOPY.b * kc + _EVERGREEN_CANOPY.b * ke,
     );
     const dryness = 1 - theme.rainfall;
-    tu.uDry.value = THREE.MathUtils.clamp(dryness * 0.35 + summer * (0.12 + dryness * 0.45) + winter * 0.4 * seasonal - spring * 0.15, 0, 1);
+    tu.uDry.value = THREE.MathUtils.clamp(dryness * 0.3 + summer * (0.04 + dryness * 0.34) + winter * 0.38 * seasonal - spring * 0.15, 0, 1);
     tu.uLush.value = spring * 0.9 + (1 - summer) * (1 - winter) * 0.2;
     tu.uAutumn.value = autumn * 0.65;
     const t = this.terrain!;
@@ -392,6 +393,7 @@ export class GameRenderer {
       saturation: 1.06 - 0.12 * sky.overcast,
       contrast: 1.05,
       vignette: 0.32,
+      nightLift: night * (1 - 0.5 * sky.overcast),
     });
     const now = performance.now();
     this.stats.drawCalls = r.info.render.calls;

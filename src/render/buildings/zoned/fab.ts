@@ -118,6 +118,8 @@ export class Fab {
   private cur = new THREE.Matrix4();
   /** highest point recorded (m) */
   top = 0;
+  /** individual railing balusters still affordable in this model (triangle budget) */
+  barBudget = 150;
 
   constructor(readonly ctx: ModelContext) {
     this.rng = ctx.rng;

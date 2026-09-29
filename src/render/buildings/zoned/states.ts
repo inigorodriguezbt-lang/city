@@ -133,6 +133,9 @@ export function constructionModel(full: ZModel, ctx: ModelContext, progress: num
       // scaffolding: poles + ledgers + planks on all 4 sides
       const sy = y + 1.8;
       const off = 0.9;
+      // low-rise: full scaffold from the ground; high-rise: a climbing screen
+      // around the top storeys only (the finished facade shows below)
+      const base = Math.max(0, m.y0, sy - 14);
       const sides: [number, number, number, number][] = [
         [-m.w / 2 - off, m.d / 2 + off, m.w / 2 + off, m.d / 2 + off],
         [m.w / 2 + off, m.d / 2 + off, m.w / 2 + off, -m.d / 2 - off],
@@ -144,12 +147,13 @@ export function constructionModel(full: ZModel, ctx: ModelContext, progress: num
         const n = Math.max(1, Math.round(len / 2.5));
         for (let i = 0; i <= n; i++) {
           const t = i / n;
-          Bm.box('metal', ax + (bx - ax) * t, Math.max(m.y0, 0), az + (bz - az) * t, 0.08, sy - Math.max(m.y0, 0), 0.08, '#b8bcc0', { top: false });
+          Bm.box('metal', ax + (bx - ax) * t, base, az + (bz - az) * t, 0.08, sy - base, 0.08, '#b8bcc0', { top: false });
         }
-        const lvls = Math.max(1, Math.floor((sy - Math.max(0, m.y0)) / 2));
+        const lvls = Math.max(1, Math.floor((sy - base) / 2));
         f.pushTRS((ax + bx) / 2, 0, (az + bz) / 2, -Math.atan2(bz - az, bx - ax));
+        if (base > 0.5) f.m().box('wood', 0, base - 0.3, 0.35, len, 0.3, 0.9, '#8a8f94', { bottom: true });
         for (let l = 1; l <= lvls; l++) {
-          const ly = Math.max(0, m.y0) + l * 2;
+          const ly = base + l * 2;
           if (ly > sy) break;
           f.m().box('wood', 0, ly - 0.05, 0.35, len, 0.05, 0.7, '#b89a6a', { bottom: true });
           f.m().box('metal', 0, ly + 1.0, 0, len, 0.05, 0.05, '#c0c4c8', { top: false });

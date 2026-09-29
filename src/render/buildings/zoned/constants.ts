@@ -31,6 +31,8 @@ export enum WinKind {
   Small = 7,
   Round = 8,
   Strip = 9,
+  /** railing panel (metal / glass parts only): balusters or frosted pane + handrail */
+  Rail = 20,
 }
 
 /** Facade flags (facade code byte 3). */

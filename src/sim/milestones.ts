@@ -48,6 +48,8 @@ export function checkMilestones(ctx: SimContext): void {
   if (next > w.milestone) {
     // grant one at a time so every fanfare / reward is announced
     for (let i = w.milestone + 1; i <= next; i++) grantMilestone(ctx, i);
+    // population achievements are announced together with the milestone
+    checkAchievements(ctx);
   }
 }
 

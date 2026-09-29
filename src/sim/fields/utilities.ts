@@ -163,7 +163,9 @@ export class UtilitySolver {
     }
     for (let c = 0; c < cc; c++) remaining[c] = compSupply[c];
     out.fill(0);
-    const stats: UtilityOutcome = { produced, consumed: 0, connected: 0, compSupply, compServed };
+    let consumed = 0;
+    for (let r = 0; r < count; r++) if (!producer[r]) consumed += demand[r];
+    const stats: UtilityOutcome = { produced, consumed, connected: 0, compSupply, compServed };
     if (!hasProducer) return stats;
 
     // multi-source BFS from every producer footprint of a supplied network
@@ -222,14 +224,10 @@ export class UtilitySolver {
       const c = comp[i];
       if (c >= 0 && compSupply[c] > 0) out[i] = 255;
     }
-    // served footprints; demand that the supplied networks see
+    // served footprints
     for (let r = 0; r < count; r++) {
-      const c = recComp[r];
-      if (!producer[r] && c >= 0 && compSupply[c] > 0) {
-        stats.consumed += demand[r];
-        if (served[r]) stats.connected++;
-      }
       if (!served[r]) continue;
+      if (!producer[r] && demand[r] > 0) stats.connected++;
       const o = r * REC_I;
       const x0 = Math.max(0, recI[o + RI_X]), y0 = Math.max(0, recI[o + RI_Y]);
       const x1 = Math.min(s, recI[o + RI_X] + recI[o + RI_W]), y1 = Math.min(s, recI[o + RI_Y] + recI[o + RI_H]);

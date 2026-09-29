@@ -12,7 +12,7 @@
 // v = 255 · (1 − Π(1 − vᵢ/255)).
 // ─────────────────────────────────────────────────────────────────────────────
 import { RoadType } from '../../core/types';
-import { BucketQueue, toBytes } from './grid';
+import { BucketQueue } from './grid';
 import type { Scene } from './scene';
 
 /** Cost (in 1/8 cell) of driving into a road cell of each type; 0 = impassable. */
@@ -83,21 +83,33 @@ export class CoverageSolver {
    *        product (Π(1 − v/255)) before the final combine.
    */
   field(sc: Scene, road: Emitter[], radial: Emitter[], out: Uint8Array, extra?: (A: Float32Array) => void): void {
-    const A = this.A, O = this.O;
-    O.fill(0);
+    const A = this.A, O = this.O, n = O.length;
+    const hasRadial = radial.length > 0 || !!extra;
+    let haveRoad = false;
     if (road.length) {
       A.fill(1);
       const bb = this.bbox;
       bb[0] = this.s; bb[1] = this.s; bb[2] = -1; bb[3] = -1;
       for (const e of road) this.roadEmitter(sc, e);
-      if (bb[2] >= 0) this.spread(sc);
+      if (bb[2] >= 0) {
+        O.fill(0);
+        this.spread(sc);
+        haveRoad = true;
+      }
     }
-    A.fill(1);
-    for (const e of radial) stampSoft(A, this.s, e);
-    extra?.(A);
-    const n = O.length;
-    for (let i = 0; i < n; i++) O[i] = 255 - (255 - O[i]) * A[i];
-    toBytes(O, out);
+    if (!haveRoad && !hasRadial) {
+      out.fill(0);
+      return;
+    }
+    if (hasRadial) {
+      A.fill(1);
+      for (const e of radial) stampSoft(A, this.s, e);
+      extra?.(A);
+    }
+    // soft union of the road spread (O) and the radial complement product (A)
+    if (!hasRadial) for (let i = 0; i < n; i++) out[i] = (O[i] + 0.5) | 0;
+    else if (!haveRoad) for (let i = 0; i < n; i++) out[i] = (255.5 - 255 * A[i]) | 0;
+    else for (let i = 0; i < n; i++) out[i] = (255.5 - (255 - O[i]) * A[i]) | 0;
   }
 
   /** Dijkstra along the road graph from the building's access cells. */

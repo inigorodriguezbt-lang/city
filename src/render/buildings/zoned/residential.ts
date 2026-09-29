@@ -423,7 +423,7 @@ function walkUp(f: Fab, k: StyleKit, floors: number): void {
     const rail = k.id === 'modern' || k.id === 'futuristic' ? 'glass' : k.id === 'european' || k.id === 'mediterranean' ? 'iron' : k.id === 'asian' ? 'solid' : 'metal';
     const cont = k.id === 'modern' || k.id === 'futuristic' || (k.id === 'asian' && rng.chance(0.5));
     for (const face of ['S', 'N'] as const)
-      withFace(f, face, 0, bz, bw, bd, (len) => balconies(f, len, floorsY, { bay: 3.2 * (bw / (Math.max(1, Math.round(bw / 3.2)) * 3.2)), depth: cont ? 1.6 : 1.1, rail, slab: '#c8c4bc', railColor: rail === 'glass' ? '#a8c4cc' : rail === 'solid' ? shade(wc, 0.92) : '#2a2c30', continuous: cont, every: cont ? 1 : k.id === 'european' ? 1 : 2, offset: 0 }));
+      withFace(f, face, 0, bz, bw, bd, (len) => balconies(f, len, floorsY, { bay: 3.2 * (bw / (Math.max(1, Math.round(bw / 3.2)) * 3.2)), depth: cont ? 1.6 : 1.1, rail, wall: wc, slab: '#c8c4bc', railColor: rail === 'glass' ? '#a8c4cc' : rail === 'solid' ? shade(wc, 0.92) : '#2a2c30', continuous: cont, every: cont ? 1 : k.id === 'european' ? 1 : 2, offset: 0 }));
   }
   // art deco vertical piers
   if (k.id === 'artdeco') withFace(f, 'S', 0, bz, bw, bd, (len) => piers(f, -len / 2, len / 2, 0, 0.8, out.eave + 0.6, Math.max(2, Math.round(len / 3.2)), 0.35, lt));
@@ -486,7 +486,7 @@ function perimeterBlock(f: Fab, k: StyleKit, floors: number): void {
       const ys: number[] = [];
       for (let j = 1; j < floors - 1; j++) ys.push(j * fh + 0.02);
       const faces: ('S' | 'N' | 'E' | 'W')[] = i === 0 ? ['N'] : i === 1 ? ['E'] : ['W'];
-      for (const face of faces) withFace(f, face, cx, cz, w, d, (len) => balconies(f, len - 2, ys, { bay: 3.3, depth: 1.3, rail: k.id === 'modern' || k.id === 'futuristic' ? 'glass' : 'iron', slab: '#c8c4bc', railColor: '#2a2c30', every: 1 }));
+      for (const face of faces) withFace(f, face, cx, cz, w, d, (len) => balconies(f, len - 2, ys, { bay: 3.3, depth: 1.3, rail: k.id === 'modern' || k.id === 'futuristic' ? 'glass' : 'iron', wall: wc, slab: '#c8c4bc', railColor: '#2a2c30', every: 1 }));
     }
     if (shape === 'flat') roofClutter(f, cx, cz, w, d, out.eave, { hvac: 1, bulkhead: { mat, color: wc } });
     if (i === 0) withFace(f, 'S', cx, cz, w, d, (len) => {
@@ -591,7 +591,7 @@ export function resHigh(f: Fab): void {
         const rail = k.id === 'modern' || mat === 'wall_glass' ? 'glass' : k.id === 'american' || k.id === 'artdeco' ? 'solid' : k.id === 'asian' ? 'solid' : 'metal';
         const cont = k.id !== 'european' || rng.chance(0.4);
         const faces: ('S' | 'N' | 'E' | 'W')[] = cw > cd ? ['S', 'N'] : ['E', 'W'];
-        if (k.id !== 'artdeco') for (const face of faces) withFace(f, face, tx, tz, cw, cd, (len) => balconies(f, len - 1, ys.slice(1), { bay: 3.4, depth: 1.4, rail, slab: '#cfccc4', railColor: rail === 'glass' ? '#9fbcc6' : shade(wc, 0.95), continuous: cont, every: 1 }));
+        if (k.id !== 'artdeco') for (const face of faces) withFace(f, face, tx, tz, cw, cd, (len) => balconies(f, len - 1, ys.slice(1), { bay: 3.4, depth: 1.4, rail, wall: wc, slab: '#cfccc4', railColor: rail === 'glass' ? '#9fbcc6' : shade(wc, 0.95), continuous: cont, every: 1 }));
       } else {
         floorBands(f, tx, tz, cw, cd, cy, fl, fh, 0.12, 0.08, '#6a7078', 1);
       }

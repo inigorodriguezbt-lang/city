@@ -75,6 +75,13 @@ export class TerrainRenderer {
     tu.uSand.value.set(t.sand);
     tu.uRock.value.set(t.rock);
     tu.uSnowCol.value.set(t.snow);
+    // what the land beyond the map looks like: woods follow the forest setting and
+    // climate; farmland patchwork in the farming biomes
+    const woody = t.trees.includes('cactus') ? 0.08 : 0.35 + t.rainfall * 0.9;
+    tu.uRingForest.value = Math.min(1, Math.max(0, world.settings.forests * woody + 0.08));
+    const FIELDS: Record<string, number> = { temperate: 1, mediterranean: 0.8, tropical: 0.35, boreal: 0.3, alpine: 0.35, desert: 0 };
+    tu.uRingFields.value = FIELDS[t.id] ?? 0.5;
+    tu.uArid.value = Math.min(1, Math.max(0, (0.3 - t.rainfall) / 0.22));
     this.material = createTerrainMaterial(tu, shared, false);
     this.ringMaterial = createTerrainMaterial(tu, shared, true);
     this.ring = new THREE.Mesh(this.far.buildGeometry(), this.ringMaterial);
@@ -102,14 +109,28 @@ export class TerrainRenderer {
     if (this.fresh && full) return;
     if (!(layers & (Layer.Terrain | Layer.Water))) {
       if (layers & Layer.Tree) this.data.updateCanopy(rect);
+      // roads / lots / buildings pin (or release) smoothed shoreline vertices
+      if (layers & (Layer.Road | Layer.Zone | Layer.Building)) {
+        const vr = this.data.refreshVisual(rect);
+        if (vr) {
+          this.buildPyramid(vr);
+          this.markNodes(vr);
+        }
+      }
       return;
     }
     this.data.update(rect);
     const s = this.world.size;
     if (rect.x0 <= 1 || rect.y0 <= 1 || rect.x1 >= s - 2 || rect.y1 >= s - 2) this.ringDirty = true;
-    if (!(layers & Layer.Terrain)) return;
-    this.buildPyramid(rect);
-    // any cached node overlapping the rect (+1 for shared vertices / bias window) is stale
+    // rendered heights may change up to 3 vertices beyond the edit (shorelines
+    // move with terrain *and* water edits; smoothing reaches 2 vertices further)
+    const pr = { x0: Math.max(0, rect.x0 - 3), y0: Math.max(0, rect.y0 - 3), x1: Math.min(s - 1, rect.x1 + 3), y1: Math.min(s - 1, rect.y1 + 3) };
+    this.buildPyramid(pr);
+    this.markNodes(pr);
+  }
+
+  /** any cached node overlapping the rect (+1 for shared vertices / bias window) is stale */
+  private markNodes(rect: Rect): void {
     for (const n of this.nodes.values()) {
       const span = NODE_Q << n.level;
       const pad = n.step + 1;
@@ -289,7 +310,7 @@ export class TerrainRenderer {
   private buildNode(n: TNode): void {
     const w = this.world;
     const s = w.size, vn = s + 1;
-    const H = w.heights;
+    const H = this.data.visH;
     const nd = this.data.nData;
     const { nx, ny, step, x0, y0 } = n;
     const W = nx + 1;
@@ -385,7 +406,7 @@ export class TerrainRenderer {
   private buildPyramid(r: Rect): void {
     const w = this.world;
     const s = w.size, vn = s + 1;
-    const H = w.heights;
+    const H = this.data.visH;
     for (let L = 0; L <= this.maxLevel; L++) {
       const span = NODE_Q << L;
       const n = Math.ceil(s / span);

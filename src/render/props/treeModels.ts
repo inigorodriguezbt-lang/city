@@ -168,8 +168,8 @@ class Builder {
   }
 
   /** drooping double-sided palm frond */
-  frond(base: V3, yaw: number, length: number, width: number, droop: number, color: RGB): void {
-    const n = 5;
+  frond(base: V3, yaw: number, length: number, width: number, droop: number, color: RGB, segs = 5): void {
+    const n = segs;
     const dir: V3 = [Math.cos(yaw), 0, Math.sin(yaw)];
     const side: V3 = [-dir[2], 0, dir[0]];
     const z: RGB = [0, 0, 0];
@@ -412,7 +412,7 @@ const SPECIES: Record<PropKind, SpeciesDef> = {
     build: (b, lod) => {
       const trunk = rgb('#8a7457'), frond = rgb('#4f7d2c');
       const rng = b.rng;
-      const segs = lod === 0 ? 6 : 3;
+      const segs = lod === 0 ? 6 : 2;
       let prev: V3 = [0, 0, 0];
       const bend = 1.4;
       for (let i = 1; i <= segs; i++) {
@@ -421,10 +421,11 @@ const SPECIES: Record<PropKind, SpeciesDef> = {
         b.cylinder(prev, p, 0.34 - t * 0.1, 0.32 - t * 0.1, lod === 0 ? 6 : 3, mul(trunk, i % 2 ? 0.85 : 1), trunk);
         prev = p;
       }
+      // distant palms: fewer, coarser fronds (the far model is drawn tens of thousands of times)
       const n = lod === 0 ? 9 : 5;
       for (let i = 0; i < n; i++) {
         const yaw = (i / n) * Math.PI * 2 + rng.next() * 0.3;
-        b.frond(prev, yaw, 4.8 + rng.next() * 1.2, 0.75, 0.9 + rng.next() * 0.4, mul(frond, 0.9 + rng.next() * 0.2));
+        b.frond(prev, yaw, 4.8 + rng.next() * 1.2, lod === 0 ? 0.75 : 0.95, 0.9 + rng.next() * 0.4, mul(frond, 0.9 + rng.next() * 0.2), lod === 0 ? 5 : 2);
       }
       if (lod === 0) for (let i = 0; i < 3; i++) b.blob([prev[0] + Math.cos(i * 2.1) * 0.35, prev[1] - 0.35, Math.sin(i * 2.1) * 0.35], [0.22, 0.22, 0.22], rgb('#5a4a2a'), K_BARK, [0, 0, 0], 0, 0.1);
     },

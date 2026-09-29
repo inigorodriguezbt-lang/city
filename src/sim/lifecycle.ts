@@ -585,7 +585,12 @@ function stepHappiness(ctx: SimContext, b: Building, bs: BSim, m: ZoneMeta, e: E
   if (Z.gb & GARBAGE_PROBLEM) h -= 8;
   if (bs.dd > DEAD_PROBLEM_DAYS) h -= 10;
   h -= Math.min(20, Z.untreated * 200);
-  if (isRes) h -= Math.max(0, r.unemployment - 0.05) * 60;
+  if (isRes && r.unemployment > 0.05) {
+    // settlers of a young town expect the jobs to follow, so joblessness weighs less at first
+    const pop = ctx.world.stats.population;
+    const patience = pop >= 2000 ? 1 : 0.4 + 0.6 * Math.max(0, pop - 300) / 1700;
+    h -= (r.unemployment - 0.05) * 60 * patience;
+  }
   h += isRes ? e.happinessRes + ctx.perks.happyRes : e.happinessWork + ctx.perks.happyWork;
   h += ctx.mods.happiness + b.level * 1.5;
   h = h < 0 ? 0 : h > 100 ? 100 : h;

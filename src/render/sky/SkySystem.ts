@@ -272,7 +272,8 @@ export class SkySystem {
     const moonUp = THREE.MathUtils.smoothstep(this.moonDir.y, -0.03, 0.06);
     const clouded = 1 - 0.84 * lw.overcast;
     const sunIntensity = 3.6 * sunUp * clouded;
-    const moonIntensity = 0.38 * (0.25 + 0.75 * moonIllum) * moonUp * (1 - 0.85 * lw.overcast) * (1 - sunUp);
+    // stylised moonlight: brighter than physical so moonlit nights stay readable
+    const moonIntensity = 0.78 * (0.3 + 0.7 * moonIllum) * moonUp * (1 - 0.85 * lw.overcast) * (1 - sunUp);
 
     const daylight = THREE.MathUtils.smoothstep(sunDir.y, -0.1, 0.3) * (1 - 0.35 * lw.overcast);
     let night = 1 - THREE.MathUtils.smoothstep(sunDir.y, -0.075, 0.07);
@@ -320,7 +321,9 @@ export class SkySystem {
     }
     // night floor: moonlit / airglow sky so night is readable, not black
     this.nightSky.setRGB(0.0038, 0.007, 0.0165).multiplyScalar(1 + 3.0 * moonIllum * moonUp);
-    const ambient = this.lighting.ambientColor.copy(this.skyAmbient).add(_c.copy(this.nightSky).multiplyScalar(3));
+    const ambient = this.lighting.ambientColor.copy(this.skyAmbient).add(_c.copy(this.nightSky).multiplyScalar(6));
+    // eye adaptation follows the physical ambient (the night boost above is a stylistic lift)
+    const adaptScale = (lum(this.skyAmbient) + lum(this.nightSky) * 3) / Math.max(1e-6, lum(this.skyAmbient) + lum(this.nightSky) * 6);
     // overcast greys the ambient, keeps most of its energy
     const ambLum = lum(ambient);
     const bright = 1 + lw.bright;
@@ -408,8 +411,8 @@ export class SkySystem {
     this.fitShadow(ctx, keyDir);
 
     // exposure & bloom adaptation
-    const lightLevel = sunIntensity * Math.max(0.15, sunDir.y) + lum(ambient) * 3;
-    this.exposure = THREE.MathUtils.clamp(0.95 / Math.pow(Math.max(lightLevel, 0.02) / 2.2, 0.28), 0.9, 3.4);
+    const lightLevel = sunIntensity * Math.max(0.15, sunDir.y) + lum(ambient) * adaptScale * 3;
+    this.exposure = THREE.MathUtils.clamp(0.95 / Math.pow(Math.max(lightLevel, 0.02) / 2.2, 0.28), 0.9, 3.4) * (1 + 0.22 * night);
     this.bloomThreshold = THREE.MathUtils.lerp(3.2, 0.9, night);
 
     // ── environment map ───────────────────────────────────────────────────

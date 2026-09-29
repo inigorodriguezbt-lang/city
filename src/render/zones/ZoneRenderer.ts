@@ -543,8 +543,8 @@ export class ZoneRenderer {
         const z = w.zone[i] as ZoneType;
         if (z !== ZoneType.None) {
           const rgb = ZONE_RGB[z] ?? WHITE;
-          // grid mode: fill ×2.1, outline stronger (see shader)
-          bz.cell(x, y, this.cornerHeights(w, x, y, LIFT), rgb, 0.22, 0.55, 0, 0, 2.1);
+          // subtle wash + thin outline; grid mode: fill ×2.4, outline stronger (see shader)
+          bz.cell(x, y, this.cornerHeights(w, x, y, LIFT), rgb, 0.1, 0.38, 0, 0, 2.4);
         } else if (this.isZoneableCell(x, y)) {
           bg.cell(x, y, this.cornerHeights(w, x, y, LIFT), WHITE, 0.05, 0.42, 0, 0, 1);
         }

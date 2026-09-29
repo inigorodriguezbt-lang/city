@@ -8,7 +8,7 @@ import type { ColorLike, ModelBuilder } from '../ModelBuilder';
 import type { MatKey } from '../types';
 import { FLOOR, LodFacade, WinKind, facCode } from './constants';
 import { BLANK, type Fab, type P2, matBay, matFloor } from './fab';
-import { P, cl, col, hueCol, shade } from './util';
+import { P, cl, col, hueCol, mix, shade } from './util';
 
 /** height of the finished lot surface above the (flattened) terrain */
 export const GROUND = 0.12;
@@ -565,14 +565,31 @@ export function withFace(f: Fab, face: Face, cx: number, cz: number, w: number, 
 
 export type RailKind = 'glass' | 'metal' | 'solid' | 'iron';
 
-/** Balconies on a face (use inside withFace): per bay or continuous bands. */
-export function balconies(f: Fab, len: number, floors: number[], opts: { bay: number; depth: number; width?: number; continuous?: boolean; rail: RailKind; slab: ColorLike; railColor: ColorLike; every?: number; offset?: number }): void {
+/** facade code marking railing panels: the metal / glass shaders draw
+ *  balusters + handrail (iron) or a frosted pane with a handrail (glass) */
+export const RAIL_CODE = facCode(WinKind.Rail);
+
+/** Flat railing panel in the plane z (x0..x1), height h above y, UV v normalized 0..1. */
+function railPanel(B: ModelBuilder, mat: MatKey, x0: number, x1: number, z: number, y: number, h: number, color: ColorLike, back: boolean): void {
+  B.quad(mat, { x: x0, y, z }, { x: x1, y, z }, { x: x1, y: y + h, z }, { x: x0, y: y + h, z }, [[x0, 0], [x1, 0], [x1, 1], [x0, 1]], color, { x: 0, y: 0, z: 1 });
+  if (back) B.quad(mat, { x: x1, y, z }, { x: x0, y, z }, { x: x0, y: y + h, z }, { x: x1, y: y + h, z }, [[x1, 0], [x0, 0], [x0, 1], [x1, 1]], color, { x: 0, y: 0, z: -1 });
+}
+
+/** Side railing panel along z (z0..z1) in the plane x. */
+function railSide(B: ModelBuilder, mat: MatKey, x: number, z0: number, z1: number, y: number, h: number, color: ColorLike): void {
+  B.quad(mat, { x, y, z: z0 }, { x, y, z: z1 }, { x, y: y + h, z: z1 }, { x, y: y + h, z: z0 }, [[z0, 0], [z1, 0], [z1, 1], [z0, 1]], color, { x: 1, y: 0, z: 0 });
+  B.quad(mat, { x, y, z: z1 }, { x, y, z: z0 }, { x, y: y + h, z: z0 }, { x, y: y + h, z: z1 }, [[z1, 0], [z0, 0], [z0, 1], [z1, 1]], color, { x: -1, y: 0, z: 0 });
+}
+
+/** Balconies on a face (use inside withFace): per bay or continuous bands.
+ *  `wall` (the facade colour) tints the shadowed balcony seen through iron railings. */
+export function balconies(f: Fab, len: number, floors: number[], opts: { bay: number; depth: number; width?: number; continuous?: boolean; rail: RailKind; slab: ColorLike; railColor: ColorLike; wall?: ColorLike; every?: number; offset?: number }): void {
   const B = f.m();
+  const R = f.m(RAIL_CODE);
   const n = Math.max(1, Math.round(len / opts.bay));
   const bw = len / n;
   const dep = opts.depth;
   const railH = 1.05;
-  const railMat: MatKey = opts.rail === 'glass' ? 'glass' : opts.rail === 'solid' ? 'plain' : 'metal';
   const segs: [number, number][] = [];
   // too many individual balconies (towers) → continuous balcony bands
   const perBay = Math.ceil(n / (opts.every ?? 1));
@@ -585,28 +602,42 @@ export function balconies(f: Fab, len: number, floors: number[], opts: { bay: nu
       segs.push([c - width / 2, c + width / 2]);
     }
   }
-  // individual railing bars are pretty but expensive: only for small balcony counts
+  // modelled balusters for small balcony counts (the per-model budget is shared
+  // by every balcony run); otherwise the railing shader draws them
   let barCount = 0;
   for (const [a, b] of segs) barCount += Math.max(2, Math.round((b - a) / 0.5)) * floors.length;
-  const bars = f.detail !== 'low' && barCount <= 160;
+  const ironish = opts.rail === 'iron' || opts.rail === 'metal';
+  const bars = ironish && f.detail === 'high' && barCount <= f.barBudget;
+  if (bars) f.barBudget -= barCount;
+  // many balconies (towers, courtyard blocks): hidden faces are dropped
+  const lean = floors.length * segs.length > 40;
+  const see = mix(opts.wall !== undefined ? shade(cl(opts.wall), 0.3) : shade(cl(opts.slab), 0.28), col('#1c1d20'), 0.35);
+  const panelMat: MatKey = opts.rail === 'glass' ? 'glass' : 'metal';
+  const panelCol = opts.rail === 'glass' ? opts.railColor : see;
   for (const y of floors) {
     for (const [a, b] of segs) {
       const w = b - a, c = (a + b) / 2;
-      B.box('concrete', c, y - 0.18, dep / 2, w, 0.18, dep, opts.slab, { bottom: true, sides: { n: false } });
-      if ((opts.rail === 'iron' || (opts.rail === 'metal' && f.detail === 'high')) && bars) {
+      B.box('concrete', c, y - 0.18, dep / 2, w, 0.18, dep, opts.slab, { bottom: true, sides: lean ? { n: false, e: false, w: false } : { n: false } });
+      if (opts.rail === 'solid') {
+        B.box('plain', c, y, dep - 0.04, w, railH, 0.06, opts.railColor, { sides: lean ? { n: false, e: false, w: false } : { n: false } });
+        if (!lean) {
+          B.box('plain', a + 0.03, y, dep / 2, 0.06, railH, dep - 0.08, opts.railColor, { sides: { n: false, s: false } });
+          B.box('plain', b - 0.03, y, dep / 2, 0.06, railH, dep - 0.08, opts.railColor, { sides: { n: false, s: false } });
+        }
+        continue;
+      }
+      if (bars) {
         B.box('metal', c, y + railH - 0.05, dep - 0.03, w, 0.05, 0.05, opts.railColor);
         const nb = Math.max(2, Math.round(w / 0.5));
         for (let k = 0; k <= nb; k++) B.box('metal', a + (k / nb) * w, y, dep - 0.03, 0.035, railH, 0.035, opts.railColor, { top: false });
         B.box('metal', a + 0.02, y, dep / 2, 0.035, railH, dep, opts.railColor, { top: false, sides: { s: false, n: false } });
         B.box('metal', b - 0.02, y, dep / 2, 0.035, railH, dep, opts.railColor, { top: false, sides: { s: false, n: false } });
-      } else {
-        const rc = opts.railColor;
-        const rm: MatKey = opts.rail === 'iron' ? 'metal' : railMat;
-        B.box(rm, c, y, dep - 0.04, w, railH, 0.06, rc, { sides: { n: false } });
-        if (floors.length * segs.length <= 40) {
-          B.box(rm, a + 0.03, y, dep / 2, 0.06, railH, dep - 0.08, rc, { sides: { n: false, s: false } });
-          B.box(rm, b - 0.03, y, dep / 2, 0.06, railH, dep - 0.08, rc, { sides: { n: false, s: false } });
-        }
+        continue;
+      }
+      railPanel(R, panelMat, a, b, dep - 0.03, y, railH, panelCol, !lean);
+      if (!lean) {
+        railSide(R, panelMat, a + 0.02, 0, dep - 0.03, y, railH, panelCol);
+        railSide(R, panelMat, b - 0.02, 0, dep - 0.03, y, railH, panelCol);
       }
     }
   }

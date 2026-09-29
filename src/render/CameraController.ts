@@ -79,6 +79,8 @@ export class CameraController {
   private pitchFloor = 0;
   private flight: Flight | null = null;
   private followFn: (() => THREE.Vector3 | null) | null = null;
+  /** height (m) of the followed target, NaN when not following */
+  private followY = NaN;
   private shakes: Shake[] = [];
   private shakeOffset = new THREE.Vector3();
   private drag: 'rotate' | 'pan' | null = null;
@@ -147,6 +149,9 @@ export class CameraController {
     switch (p.type) {
       case 'down': {
         if (!p.onCanvas) return;
+        // a tool may claim a button (e.g. right-drag erase): leave it alone
+        const bit = p.button === 0 ? 1 : p.button === 1 ? 4 : p.button === 2 ? 2 : 0;
+        if ((p.claimed ?? 0) & bit) return;
         if (p.button === 2 && !p.shift) this.drag = 'rotate';
         else if (p.button === 1 || (p.button === 2 && p.shift)) this.drag = 'pan';
         else return;
@@ -294,8 +299,13 @@ export class CameraController {
       if (fl.t >= 1) this.flight = null;
     } else if (this.followFn) {
       const v = this.followFn();
-      if (!v) this.followFn = null;
-      else this.tFocus.set(v.x / CELL, v.z / CELL);
+      if (!v) {
+        this.followFn = null;
+        this.followY = NaN;
+      } else {
+        this.tFocus.set(v.x / CELL, v.z / CELL);
+        this.followY = v.y;
+      }
     }
 
     // ── clamp targets ─────────────────────────────────────────────────────
@@ -329,7 +339,8 @@ export class CameraController {
 
     // ── place the camera ──────────────────────────────────────────────────
     const fx = this.focus.x * CELL, fz = this.focus.y * CELL;
-    const g = this.groundAt(fx, fz);
+    // orbit around the followed target's own height (bridges, elevated rails)
+    const g = this.followFn && Number.isFinite(this.followY) ? Math.max(this.groundAt(fx, fz), this.followY) : this.groundAt(fx, fz);
     this.focusHeight = this.hasInit ? this.focusHeight + (g - this.focusHeight) * Math.min(1, dt * 9) : g;
     const fy = this.focusHeight;
     const d = this.distance;
@@ -423,6 +434,12 @@ export class CameraController {
   follow(fn: (() => THREE.Vector3 | null) | null): void {
     this.flight = null;
     this.followFn = fn;
+    this.followY = NaN;
+  }
+
+  /** true while a follow target is being tracked */
+  get following(): boolean {
+    return this.followFn !== null;
   }
 
   /** camera shake (earthquakes, explosions): intensity in meters, duration seconds */

@@ -246,7 +246,8 @@ export class Frame {
 
   /** bottom of vertical skirts at a world point */
   skirt(wx: number, wz: number, base: number): number {
-    return this.bridge ? base - DECK_THICKNESS : Math.min(this.terrain(wx, wz), base) - 0.08;
+    // deep enough to meet coarse terrain LODs and triangulated cells
+    return this.bridge ? base - DECK_THICKNESS : Math.min(this.terrain(wx, wz), base) - 0.35;
   }
 }
 

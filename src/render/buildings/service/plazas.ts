@@ -99,7 +99,9 @@ const M: Record<string, (k: Kit) => number> = {
     k.rev('concrete', 0, 0.5, 0, [[0.4, 0], [0.7, 0.6], [0.8, 0.9]], 0xd8d2c4, 12, { crease: 60 });
     foliage(k, 0, 1.4, 0);
     for (const [x, z] of [[-7, 7], [7, -7]] as P2[]) k.at(x, 0, z, Math.atan2(-x, -z), () => bench(k, 0, 0, 0));
-    return 3;
+    lampPost(k, -7, -7, 3.8);
+    lampPost(k, 7, 7, 3.8);
+    return 4.4;
   },
 
   fountain_plaza(k) {

@@ -41,6 +41,8 @@ export interface PostFrameParams {
   saturation: number;
   contrast: number;
   vignette: number;
+  /** 0..1 scotopic blue lift of dark areas at night */
+  nightLift: number;
 }
 
 const FINAL_FRAG = /* glsl */ `
@@ -58,6 +60,7 @@ uniform vec3 uWB;
 uniform float uCloudShadow;
 uniform vec3 uSunDir;
 uniform mat4 uInvViewProj;
+uniform float uNightLift;
 ${HASH_GLSL}
 ${CLOUD_GLSL}
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
@@ -100,6 +103,13 @@ void main() {
   c = mix(c, vec3(l), uDesat);
   c *= uExposure * uWB;
   l = dot(c, LUMA);
+  // scotopic (moonlit) vision: dark areas shift toward a readable blue while
+  // lamps, windows and the lit sky keep their colour
+  if (uNightLift > 0.0) {
+    float nl = uNightLift * (1.0 - smoothstep(0.02, 0.3, l));
+    c = mix(c, vec3(l) * vec3(0.62, 0.8, 1.2) * 1.7 + vec3(0.0012, 0.0018, 0.0036), nl * 0.75);
+    l = dot(c, LUMA);
+  }
   c = max(mix(vec3(l), c, uSat), 0.0);
   c = pow(max(c, vec3(1e-6)) / 0.18, vec3(uContrast)) * 0.18;
   c = acesFilmic(c);
@@ -182,6 +192,7 @@ export class PostFX {
         uVignette: { value: 0.3 },
         uWB: { value: new THREE.Color(1, 1, 1) },
         uCloudShadow: { value: 0 },
+        uNightLift: { value: 0 },
         uSunDir: { value: new THREE.Vector3(0, 1, 0) },
         uInvViewProj: { value: this.invViewProj },
         uNoise: shared.uNoise,
@@ -296,6 +307,7 @@ export class PostFX {
     fu.uSat.value = p.saturation;
     fu.uContrast.value = p.contrast;
     fu.uVignette.value = p.vignette;
+    fu.uNightLift.value = p.nightLift;
     this.invViewProj.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse).invert();
     this.quad.material = this.finalMat;
     if (s.antialias && this.smaa) {

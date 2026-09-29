@@ -9,7 +9,7 @@ import { ZoneType, type StyleId } from '../../src/core/types';
 import { STYLES, styleDef } from '../../src/data/styles';
 import { ZONES, zoneById } from '../../src/data/zones';
 import { themeDef } from '../../src/data/themes';
-import { getChunkMaterial, getAnimDepthMaterials, updateMaterials } from '../../src/render/buildings/materials';
+import { getChunkMaterial, getAnimDepthMaterials, setMaterialWeather, updateMaterials } from '../../src/render/buildings/materials';
 import { buildZoned, schedFor } from '../../src/render/buildings/zoned';
 import { mergeDetail, mergeLod, type MergeItem, type LodItem } from '../../src/render/buildings/zoned/merge';
 import { buildGlowMesh, updateGlow, type WorldLight } from '../../src/render/buildings/zoned/glow';
@@ -153,13 +153,20 @@ if (night > 0.5) {
 }
 
 // ── lots ───────────────────────────────────────────────────────────────────
-function stateCond(): { cond: number; flags: string } {
-  switch (stateArg.split(':')[0]) {
+// state=mix cycles the lots through every building state
+const MIX = ['normal', 'abandoned', 'burned', 'collapsed', 'fire', 'flooded', 'construction:0.6', 'normal'];
+let lotIndex = 0;
+function lotState(): string {
+  return stateArg === 'mix' ? MIX[lotIndex % MIX.length] : stateArg;
+}
+function stateCond(arg = stateArg): { cond: number; flags: string } {
+  switch (arg.split(':')[0]) {
     case 'abandoned': return { cond: Cond.Abandoned, flags: 'abandoned' };
     case 'burned': return { cond: Cond.Burned, flags: 'burned' };
     case 'fire': return { cond: Cond.OnFire, flags: 'fire' };
     case 'flooded': return { cond: Cond.Flooded, flags: 'flooded' };
-    case 'construction': return { cond: Cond.Construction, flags: 'construction' };
+    case 'construction': case 'stages': return { cond: Cond.Construction, flags: 'construction' };
+    case 'collapsed': return { cond: 0, flags: 'collapsed' };
     default: return { cond: 0, flags: 'normal' };
   }
 }
@@ -201,11 +208,19 @@ for (const row of rowDefs) {
         rng: new RNG(seed), detail,
       };
       const t0 = performance.now();
-      const model = buildZoned(ctx);
+      let model = buildZoned(ctx);
+      const lotSt = lotState();
+      lotIndex++;
+      const sk = lotSt.split(':');
+      if (sk[0] === 'construction') model = constructionModel(model, { ...ctx, rng: new RNG(seed + 1) }, Number(sk[1] ?? 0.5));
+      else if (sk[0] === 'stages') model = constructionModel(model, { ...ctx, rng: new RNG(seed + 1) }, Math.min(0.97, (l.level - 0.5) / 5 + (STYLE_INDEX[sid] ?? 0) * 0.02));
+      else if (sk[0] === 'collapsed') model = rubbleModel(model, { ...ctx, rng: new RNG(seed + 2) });
+      else if (sk[0] === 'abandoned') model = weatherModel(model, 'abandoned');
+      else if (sk[0] === 'burned') model = weatherModel(model, 'burned');
       genMs += performance.now() - t0;
       const cx = x + l.lw / 2, cz = zRow + rowDepth - l.ld / 2;
       const m = new THREE.Matrix4().makeTranslation(cx, 0, cz);
-      const info = packInfo(seed, schedFor(zd.type), STYLE_INDEX[sid] ?? 0, 2, st.cond);
+      const info = packInfo(seed, schedFor(zd.type), STYLE_INDEX[sid] ?? 0, sk[0] === 'normal' || sk[0] === 'flooded' || sk[0] === 'fire' ? 2 : 0, stateCond(lotSt).cond);
       items.push({ src: model, matrix: m, info });
       lodItems.push({ masses: model.masses, matrix: m, info });
       let t = 0;
@@ -309,6 +324,7 @@ const t0 = performance.now();
 function frame() {
   t = (performance.now() - t0) / 1000 + Number(q.get('t') ?? 0);
   updateMaterials(night, t, hour, t);
+  setMaterialWeather(Number(q.get('wet') ?? 0), Number(q.get('snow') ?? 0));
   updateGlow(night, t, innerHeight);
   renderer.render(scene, camera);
   frames++;

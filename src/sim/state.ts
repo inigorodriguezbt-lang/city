@@ -225,7 +225,8 @@ export interface SimState {
   roll: { births: number[]; deaths: number[]; movedIn: number[]; movedOut: number[]; i: number };
   metrics: Metrics;
   chirp: { next: number; cd: Record<string, number>; recent: number[]; queue: { topic: string; vars: Record<string, string>; x?: number; y?: number; buildingId?: number }[] };
-  advisor: { next: number; cd: Record<string, number> };
+  /** next regular advisor notice day, last notice day, per-tip cooldowns */
+  advisor: { next: number; last?: number; cd: Record<string, number> };
   /** exports sold in the current month ($) */
   monthExports: number;
   /** first day each service category was found unlocked (drives SERVICE_GRACE_DAYS) */

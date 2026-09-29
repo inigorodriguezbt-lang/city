@@ -223,7 +223,7 @@ export class TreeRenderer {
             const ki = PROP_KINDS.indexOf(kind);
             const r2 = hashFloat(x * 3 + k, y * 5 - k, seed + 99);
             const base = 0.78 + r2 * 0.42 + (d === 3 ? 0.08 : 0);
-            lists[ki].push(wx, w.heightAt(wx, wz) - 0.25, wz, base, r2 * 1000 % (Math.PI * 2), hashFloat(x, y, k + 400), hashFloat(y, x, k + 900) * 6.283, hashFloat(x + k * 131, y, seed + 17));
+            lists[ki].push(wx, this.groundAt(wx, wz) - 0.25, wz, base, r2 * 1000 % (Math.PI * 2), hashFloat(x, y, k + 400), hashFloat(y, x, k + 900) * 6.283, hashFloat(x + k * 131, y, seed + 17));
           }
         }
         // boulders on steep or rocky ground (never on zoned lots)
@@ -235,7 +235,7 @@ export class TreeRenderer {
             const h1 = hash3(x, y, seed + 911 + k);
             const wx = x * CELL + 2 + ((h1 & 0xffff) / 65535) * 12, wz = y * CELL + 2 + (((h1 >>> 16) & 0xffff) / 65535) * 12;
             const sc = 0.5 + hashFloat(x, y, k + 555) ** 2 * 2.2;
-            lists[ROCK].push(wx, w.heightAt(wx, wz) - 0.35 * sc, wz, sc, hashFloat(x, y, k + 71) * 6.283, hashFloat(x, y, k + 72), 0, hashFloat(x + 1, y, k + 73));
+            lists[ROCK].push(wx, this.groundAt(wx, wz) - 0.35 * sc, wz, sc, hashFloat(x, y, k + 71) * 6.283, hashFloat(x, y, k + 72), 0, hashFloat(x + 1, y, k + 73));
           }
         }
       }
@@ -255,6 +255,8 @@ export class TreeRenderer {
 
   minHeight = 0;
   maxHeight = 400;
+  /** ground height sampler (rendered terrain surface); defaults to the true heights */
+  groundAt: (wx: number, wz: number) => number = (wx, wz) => this.world.heightAt(wx, wz);
 
   private pickSpecies(wx: number, wz: number, alt: number, shore: boolean, fert: number, r: number): PropKind {
     const kinds = this.themeKinds;

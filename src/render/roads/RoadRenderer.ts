@@ -34,6 +34,10 @@ interface ChunkState {
 const NEAR_IN = 1150;
 const NEAR_OUT = 1350;
 const SIGNAL_CYCLE = 26;
+/** seasonal canopy albedo (linear) of street trees, close to the terrain trees' palette */
+const CANOPY_SPRING = new THREE.Color().setRGB(0.1, 0.17, 0.05);
+const CANOPY_SUMMER = new THREE.Color().setRGB(0.065, 0.12, 0.035);
+const CANOPY_AUTUMN = new THREE.Color().setRGB(0.24, 0.1, 0.03);
 
 export class RoadRenderer {
   protected world: World | null = null;
@@ -338,11 +342,10 @@ export class RoadRenderer {
     // seasonal canopy tint for median / plaza trees
     const cal = calendar(w.time.day);
     const yp = cal.yearProgress; // 0 = Jan 1
-    const spring = new THREE.Color(0.34, 0.5, 0.16), summer = new THREE.Color(0.2, 0.36, 0.1), autumn = new THREE.Color(0.62, 0.3, 0.07);
-    if (yp < 0.25) this.canopy.copy(spring).lerp(summer, Math.max(0, (yp - 0.12) / 0.13));
-    else if (yp < 0.62) this.canopy.copy(summer);
-    else if (yp < 0.9) this.canopy.copy(summer).lerp(autumn, Math.min(1, (yp - 0.62) / 0.12));
-    else this.canopy.copy(autumn);
+    if (yp < 0.25) this.canopy.copy(CANOPY_SPRING).lerp(CANOPY_SUMMER, Math.max(0, (yp - 0.12) / 0.13));
+    else if (yp < 0.62) this.canopy.copy(CANOPY_SUMMER);
+    else if (yp < 0.9) this.canopy.copy(CANOPY_SUMMER).lerp(CANOPY_AUTUMN, Math.min(1, (yp - 0.62) / 0.12));
+    else this.canopy.copy(CANOPY_AUTUMN);
     const winter = cal.season === 'winter' && w.theme.snowiness > 0.02;
     const cam3 = r.camera;
     const px = (2 * Math.tan(THREE.MathUtils.degToRad(cam3.fov) / 2)) / Math.max(1, r.canvas.clientHeight || r.canvas.height || 800);

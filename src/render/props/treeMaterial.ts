@@ -109,7 +109,10 @@ export function createPropMaterial(pu: PropUniforms, shared: SharedUniforms): TH
           if (abs(k - 1.0) < 0.5) {
             col = mix(col, col * vec3(1.18, 1.22, 0.7), uSpring * 0.55);
             float au = clamp(uAutumn * 1.5 - j * 0.5, 0.0, 1.0);
-            vec3 autumn = aAlt * (0.7 + 0.6 * fract(j * 13.7)) * mix(vec3(1.0), vec3(1.15, 0.8, 0.5), step(0.7, fract(j * 5.3)));
+            // per-tree autumn palette: the species colour drifting toward gold or rust, slightly muted
+            vec3 autumn = mix(aAlt, fract(j * 3.17) < 0.5 ? vec3(0.62, 0.36, 0.06) : vec3(0.36, 0.13, 0.04), 0.25 + 0.4 * fract(j * 9.1));
+            autumn *= 0.72 + 0.5 * fract(j * 13.7);
+            autumn = mix(autumn, vec3(dot(autumn, vec3(0.2126, 0.7152, 0.0722))), 0.16);
             col = mix(col, autumn, au);
           } else if (abs(k - 3.0) < 0.5) {
             col = mix(col, col * vec3(1.1, 1.18, 0.8), uSpring * 0.4);

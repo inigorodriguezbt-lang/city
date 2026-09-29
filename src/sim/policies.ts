@@ -200,9 +200,9 @@ export class PolicySystem {
     return { ok: true, active: true };
   }
 
-  /** monthly cost of a policy in a scope (population of the scope) */
+  /** monthly cost of a policy in a scope: costPer1000 per 1000 citizens of the scope, plus any flat cost */
   costFor(p: PolicyInfo, population: number): number {
-    return p.costPer1000 * Math.max(1, population / 1000) + (p.flatCost ?? 0);
+    return (p.costPer1000 * Math.max(0, population)) / 1000 + (p.flatCost ?? 0);
   }
 
   /** total monthly policy cost given city and per-district populations */

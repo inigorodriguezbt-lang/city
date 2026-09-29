@@ -253,25 +253,31 @@ export function createSkyMaterial(uniforms: SkyUniforms, envMode: boolean): THRE
       }
 
       vec4 cumulus(vec3 d, vec3 haze) {
-        if (d.y < 0.015) return vec4(0.0);
+        if (d.y < 0.012) return vec4(0.0);
         float camY = cameraPosition.y;
         float t = (uCloudHeight - camY) / d.y;
         vec2 p = cameraPosition.xz + d.xz * t;
         float den = cloudDensity(p);
         if (den <= 0.001) return vec4(0.0);
         vec3 L = uCloudLightDir;
-        vec2 lo = normalize(L.xz + vec2(1e-4)) * (420.0 / max(L.y, 0.12));
-        float s1 = cloudDensity(p + lo * 0.35);
-        float s2 = cloudDensity(p + lo * 1.0);
-        float shadow = exp(-(s1 * 1.1 + s2 * 0.8) * 2.2);
-        float powder = 1.0 - exp(-den * 5.0);
+        // light march toward the key light through the deck (3 taps)
+        vec2 lo = normalize(L.xz + vec2(1e-4)) * (400.0 / max(L.y, 0.12));
+        float s = cloudDensity(p + lo * 0.22) * 0.5 + cloudDensity(p + lo * 0.6) * 0.35 + cloudDensity(p + lo * 1.25) * 0.25;
+        // Beer + a softer multiple-scattering lobe keeps thick clouds luminous
+        float beer = exp(-s * 2.6);
+        float ms = mix(beer, exp(-s * 0.7), 0.45);
+        float powder = 1.0 - exp(-den * 4.0);
         float mu = dot(d, L);
-        float phase = hg(mu, 0.6) * 0.7 + hg(mu, -0.25) * 0.3;
+        float phase = hg(mu, 0.6) * 0.72 + hg(mu, -0.2) * 0.28;
         float dark = 1.0 - uCloudDark;
-        vec3 lit = uCloudSun * shadow * powder * (0.35 + 9.0 * phase) * dark;
-        vec3 amb = uCloudAmbient * mix(1.05, 0.55, den) * mix(1.0, 0.55, uCloudDark);
-        vec3 col = lit + amb;
-        float alpha = smoothstep(0.0, 0.55, den) * 0.97;
+        vec3 lit = uCloudSun * ms * mix(1.0, powder, 0.55) * (0.62 + 11.0 * phase) * 1.2 * dark;
+        // silver lining: thin edges light up when looking toward the light
+        lit += uCloudSun * (1.0 - smoothstep(0.0, 0.45, den)) * pow(max(mu, 0.0), 8.0) * 2.5 * dark;
+        // sky light from above (thin parts brighter), ground bounce on the bases
+        float baseView = smoothstep(0.08, 0.7, d.y);
+        vec3 amb = uCloudAmbient * (1.32 - 0.5 * den) * mix(1.0, 0.55, uCloudDark) + uGroundColor * 0.35 * den;
+        vec3 col = lit * mix(1.0, 0.72, baseView * den) + amb;
+        float alpha = smoothstep(0.0, 0.42, den) * 0.97;
         // aerial perspective: distant clouds melt into the horizon haze
         float fade = exp(-t / 52000.0);
         col = mix(haze, col, clamp(fade * 1.25, 0.0, 1.0));
@@ -354,7 +360,14 @@ export function createSkyMaterial(uniforms: SkyUniforms, envMode: boolean): THRE
         float oc = uOvercast;
         if (oc > 0.0) {
           float glow = pow(max(dot(d, uCloudLightDir), 0.0), 6.0);
-          vec3 ov = uOvercastColor * (0.78 + 0.32 * up + 0.35 * glow);
+          // structured deck: slow-drifting darker cloud masses and brighter gaps
+          vec2 op = (cameraPosition.xz + d.xz * ((1600.0 - cameraPosition.y) / max(d.y, 0.03))) + uCloudOffset * 0.7;
+          float m1 = texture2D(uNoise, op / 14000.0).r;
+          float m2 = texture2D(uNoise, op / 4200.0 + 0.37).g;
+          float masses = smoothstep(0.3, 0.8, m1 * 0.65 + m2 * 0.35);
+          float structure = mix(1.12, 0.62 - 0.22 * uCloudDark, masses) * mix(1.0, 0.94, uCloudDark);
+          structure = mix(1.0, structure, smoothstep(0.02, 0.2, d.y) * 0.85);
+          vec3 ov = uOvercastColor * (0.78 + 0.32 * up + 0.35 * glow) * structure;
           col = mix(col, ov, oc * smoothstep(-0.05, 0.08, d.y + 0.1));
         }
         // horizon haze matches the scene fog colour

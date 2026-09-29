@@ -197,6 +197,32 @@ function blob(r: number, x: number, y: number, z: number, seed: number, col: num
   return colored(g, col);
 }
 
+/** canopy lump: noisy sphere with vertex colors darkening toward the crown base (y0) and inward */
+function crownLump(r: number, x: number, y: number, z: number, seed: number, y0: number, y1: number): THREE.BufferGeometry {
+  const g = new THREE.IcosahedronGeometry(r, 1);
+  const p = g.getAttribute('position') as THREE.BufferAttribute;
+  for (let i = 0; i < p.count; i++) {
+    const vx = p.getX(i), vy = p.getY(i), vz = p.getZ(i);
+    const n = Math.sin(vx * 3.1 + seed) * Math.cos(vz * 2.7 - seed * 1.3) * Math.sin(vy * 2.3 + seed * 0.7);
+    const k = 1 + n * 0.2;
+    p.setXYZ(i, vx * k, vy * k * 0.82, vz * k);
+  }
+  g.computeVertexNormals();
+  g.translate(x, y, z);
+  const geo = g.toNonIndexed();
+  const q = geo.getAttribute('position') as THREE.BufferAttribute;
+  const col = new Float32Array(q.count * 3);
+  for (let i = 0; i < q.count; i++) {
+    const hy = Math.min(1, Math.max(0, (q.getY(i) - y0) / (y1 - y0)));
+    const rad = Math.min(1, Math.hypot(q.getX(i), q.getZ(i)) / 2.2);
+    const ao = (0.42 + 0.58 * Math.pow(hy, 0.8)) * (0.72 + 0.28 * rad);
+    col[i * 3] = col[i * 3 + 1] = col[i * 3 + 2] = ao;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  for (const k of Object.keys(geo.attributes)) if (k !== 'position' && k !== 'normal' && k !== 'color') geo.deleteAttribute(k);
+  return geo;
+}
+
 const POLE = 0x2a2e33;
 const DARK = 0x16181b;
 
@@ -285,11 +311,13 @@ function buildModels(): Models {
     seg3(V(0, 2.6, 0), V(0.7, 3.8, 0.3), 0.06, 0x4a3727, 5),
     seg3(V(0, 2.9, 0), V(-0.6, 4.0, -0.4), 0.06, 0x4a3727, 5),
   ])!;
-  geo[FT.Canopy] = mergeGeometries([
-    blob(1.75, 0, 4.6, 0, 1, 0xffffff),
-    blob(1.25, 0.8, 5.5, 0.4, 2, 0xffffff),
-    blob(1.2, -0.7, 5.2, -0.5, 5, 0xffffff),
-  ])!;
+  // rounded broadleaf crown: clustered lumps with baked self-shadowing (darker
+  // underside and core), tinted per instance with the seasonal canopy color
+  const lumps: [number, number, number, number][] = [
+    [0, 4.9, 0, 1.55], [0.95, 4.55, 0.35, 1.1], [-0.85, 4.65, -0.45, 1.15], [0.3, 4.4, -1.0, 1.05],
+    [-0.4, 4.35, 0.95, 1.05], [0.45, 5.75, 0.2, 1.05], [-0.5, 5.6, -0.3, 0.95], [0.1, 6.35, 0, 0.75],
+  ];
+  geo[FT.Canopy] = mergeGeometries(lumps.map(([x, y, z, r], i) => crownLump(r, x, y, z, i * 1.7 + 0.4, 3.2, 7.0)))!;
   // winter: bare crown
   const br: THREE.BufferGeometry[] = [];
   for (let i = 0; i < 7; i++) {
@@ -353,9 +381,9 @@ void main() {
   #include <logdepthbuf_fragment>
   float r = length(vUv);
   if (r > 1.0) discard;
-  float core = exp(-r * r * 22.0);
-  float halo = pow(1.0 - r, 2.2) * 0.35;
-  float a = (core * 2.2 + halo) * uNight * vFade;
+  float core = exp(-r * r * 26.0);
+  float halo = pow(1.0 - r, 2.6) * 0.3;
+  float a = (core * 1.8 + halo) * uNight * vFade;
   gl_FragColor = vec4(uColor * a, 1.0);
   #include <fog_fragment>
 }`;
@@ -392,8 +420,10 @@ void main() {
   #include <logdepthbuf_fragment>
   float r2 = dot(vUv, vUv);
   if (r2 > 1.0) discard;
-  float f = (1.0 - r2);
-  f = f * f * (0.55 + 0.45 * exp(-r2 * 6.0));
+  // ground irradiance of a lamp ~ h^3 / (h^2 + d^2)^1.5 (pool radius ≈ 1.6 × mast height), windowed to 0 at the rim
+  float k = 1.0 + r2 * 2.6;
+  float w = 1.0 - r2;
+  float f = w * w / (k * sqrt(k));
   gl_FragColor = vec4(uColor * f * uNight * vStrength, 1.0);
   #include <fog_fragment>
 }`;
@@ -489,7 +519,7 @@ export class FurnitureSystem {
   constructor() {
     this.group.name = 'road-furniture';
     this.matFurn = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.35 });
-    this.matCanopy = new THREE.MeshStandardMaterial({ color: 0x3f6b2a, roughness: 0.85, metalness: 0 });
+    this.matCanopy = new THREE.MeshStandardMaterial({ color: 0x3f6b2a, vertexColors: true, roughness: 0.82, metalness: 0 });
     this.matCanopy.onBeforeCompile = (sh) => {
       sh.uniforms.uSnow = this.snowU;
       sh.vertexShader = sh.vertexShader
@@ -514,8 +544,8 @@ export class FurnitureSystem {
     this.glowGeo.setAttribute('position', quad.getAttribute('position'));
     this.poolGeo.index = quad.index;
     this.poolGeo.setAttribute('position', quad.getAttribute('position'));
-    this.glowMat = lightMaterial(GLOW_VS, GLOW_FS, { uNight: { value: 0 }, uPixel: { value: 0.001 }, uColor: { value: new THREE.Color(1.0, 0.78, 0.5) } }, true);
-    this.poolMat = lightMaterial(POOL_VS, POOL_FS, { uNight: { value: 0 }, uColor: { value: new THREE.Color(0.2, 0.145, 0.08) } }, true);
+    this.glowMat = lightMaterial(GLOW_VS, GLOW_FS, { uNight: { value: 0 }, uPixel: { value: 0.001 }, uColor: { value: new THREE.Color(1.0, 0.7, 0.4) } }, true);
+    this.poolMat = lightMaterial(POOL_VS, POOL_FS, { uNight: { value: 0 }, uColor: { value: new THREE.Color(0.075, 0.05, 0.026) } }, true);
     this.sigMat = lightMaterial(SIG_VS, SIG_FS, { uTime: { value: 0 } }, false);
     this.glow = new THREE.Mesh(this.glowGeo, this.glowMat);
     this.pool = new THREE.Mesh(this.poolGeo, this.poolMat);

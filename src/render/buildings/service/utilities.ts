@@ -233,6 +233,7 @@ const M: Record<string, (k: Kit) => number> = {
     k.box('plain', 3.9, 1.2, 10, 0.1, 1, 1, C.yellow, { top: false });
     fence(k, [[-W / 2 + 0.8, D / 2 - 0.8], [-W / 2 + 0.8, -D / 2 + 5], [W / 2 - 0.8, -D / 2 + 5], [W / 2 - 0.8, D / 2 - 0.8]], 1.8, 0x5d6166, 2.6);
     k.emitter('steam', 0, 0.5, -D / 2 - 1, 0.25);
+    k.light(0, 2.9, 10.9, C.lampWarm, 2.4, 'lamp');
     return 3.8;
   },
 
@@ -301,7 +302,12 @@ const M: Record<string, (k: Kit) => number> = {
     }
     fence(k, [[-W / 2 + 0.8, D / 2 - 0.8], [-W / 2 + 0.8, -D / 2 + 0.8], [W / 2 - 0.8, -D / 2 + 0.8], [W / 2 - 0.8, D / 2 - 10]], 2.4, 0x5d6166, 3);
     k.emitter('dust', 3, 8, -6, 0.3);
-    return 8;
+    // floodlight mast over the weighbridge + office lamp
+    k.cyl('metal', -W / 2 + 10, 0, D / 2 - 10.5, 0.14, 0.1, 9, 0x6a6e72, 6);
+    k.box('metal', -W / 2 + 10, 9, D / 2 - 10.5, 1.4, 0.5, 0.5, 0x3a3d42);
+    k.light(-W / 2 + 10, 8.9, D / 2 - 10, C.lampWarm, 7, 'flood');
+    k.light(-W / 2 + 6, 2.6, D / 2 - 2.7, C.lampWarm, 2.5, 'lamp');
+    return 9.5;
   },
 
   incinerator(k) {

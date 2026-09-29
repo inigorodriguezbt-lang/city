@@ -5,10 +5,9 @@
 // elevation) which are rebuilt only when the main thread sends new terrain.
 // ─────────────────────────────────────────────────────────────────────────────
 import { CELL, WATER_EPS } from '../../core/constants';
-import { BFlag } from '../../core/types';
 import { BlurScratch, blurInPlace, distanceToMask } from './grid';
 import {
-  META_SERVICE, REC_F, REC_I, RF_BUILT, RF_EFF, RI_FLAGS, RI_H, RI_META, RI_W, RI_X, RI_Y, type FieldJob, type TerrainPacket, type WeatherPacket,
+  REC_F, REC_I, RI_H, RI_META, RI_W, RI_X, RI_Y, STOP_STRIDE, type FieldJob, type TerrainPacket, type WeatherPacket,
 } from './protocol';
 
 /** Cap for shore distance (cells); cells farther away hold this value. */
@@ -72,18 +71,20 @@ export class TerrainState {
 export class Scene {
   readonly n: number;
   road!: Uint8Array;
+  roadFlags!: Uint8Array;
   zone!: Uint8Array;
   trees!: Uint8Array;
   traffic!: Uint8Array;
   recI!: Int32Array;
   recF!: Float32Array;
   count = 0;
-  stops!: Int32Array;
+  stops!: Float32Array;
+  stopCount = 0;
   weather!: WeatherPacket;
-  powerUseMult = 1;
-  waterUseMult = 1;
   rainfall = 0.5;
   full = false;
+  /** in-game days since the previous job */
+  days = 1;
   /** record index occupying each cell, -1 = none */
   bidx: Int32Array;
 
@@ -94,6 +95,7 @@ export class Scene {
 
   load(job: FieldJob): void {
     this.road = job.road;
+    this.roadFlags = job.roadFlags;
     this.zone = job.zone;
     this.trees = job.trees;
     this.traffic = job.traffic;
@@ -101,11 +103,11 @@ export class Scene {
     this.recF = job.recF;
     this.count = Math.min(job.count, Math.floor(job.recI.length / REC_I), Math.floor(job.recF.length / REC_F));
     this.stops = job.stops;
+    this.stopCount = Math.min(job.stopCount, Math.floor(job.stops.length / STOP_STRIDE));
     this.weather = job.weather;
-    this.powerUseMult = job.powerUseMult;
-    this.waterUseMult = job.waterUseMult;
     this.rainfall = job.rainfall;
     this.full = job.full;
+    this.days = job.days > 0 ? job.days : 0;
     this.rasterize();
   }
 
@@ -123,19 +125,6 @@ export class Scene {
   // ── record helpers ─────────────────────────────────────────────────────
   meta(r: number): number {
     return this.recI[r * REC_I + RI_META];
-  }
-  flags(r: number): number {
-    return this.recI[r * REC_I + RI_FLAGS];
-  }
-  isService(r: number): boolean {
-    return (this.recI[r * REC_I + RI_META] & META_SERVICE) !== 0;
-  }
-  /** complete, standing (not rubble) */
-  active(r: number): boolean {
-    return this.recF[r * REC_F + RF_BUILT] >= 1 && (this.recI[r * REC_I + RI_FLAGS] & (BFlag.Collapsed | BFlag.Burned)) === 0;
-  }
-  eff(r: number): number {
-    return this.recF[r * REC_F + RF_EFF];
   }
   /** clamp footprint to the map: [x0, y0, x1, y1) */
   rect(r: number, out: Int32Array): boolean {

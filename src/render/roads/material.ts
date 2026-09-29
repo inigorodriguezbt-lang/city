@@ -225,14 +225,23 @@ const SURFACE = /* glsl */ `
     // earthy compacted gravel: tan stones in brown soil, large-scale tone drift
     vec3 soil = vec3(0.12, 0.092, 0.064) * (0.8 + 0.4 * rD.r);
     rCol = mix(soil, vec3(0.29, 0.245, 0.18), smoothstep(0.12, 0.75, pb)) * (0.8 + 0.4 * rM.r);
-    if (!rJunc) {
-      float as = abs(rs);
+    float as = abs(rs);
+    if (!rJunc && rhw > 2.0) {
+      // wheel ruts and a grassy crown between them
       float rut = 1.0 - smoothstep(0.3, 0.6, abs(as - 1.6));
       rCol = mix(rCol, vec3(0.105, 0.085, 0.062) * (0.85 + 0.3 * rD.r), rut * 0.5);
       float hump = 1.0 - smoothstep(0.2, 0.7, as);
       rCol = mix(rCol, uGrass * (0.7 + 0.5 * rD.r), hump * 0.55 * smoothstep(0.4, 0.65, rD.a + 0.1 * rM.r));
-      float e = smoothstep(rhw - 1.0, rhw, as);
-      rCol = mix(rCol, uGrass * (0.75 + 0.5 * rD.r), e * smoothstep(0.3, 0.7, rD.r + e * 0.4));
+    }
+    // ragged fringe: the gravel thins out into the terrain beyond the carriageway
+    float edgeD = rJunc ? -8.0 : as - rhw;
+    if (edgeD > -0.5) {
+      float f = clamp((edgeD + 0.5) / 1.6, 0.0, 1.0);
+      // ~0.8 m clumps (concrete mottle channel) + single pebbles: gravel scattered into the grass
+      float clump = clamp((texture2D(uDetail, rUV / 6.5 + 0.23).a - 0.33) * 2.4, 0.0, 1.0);
+      float rag = clump * 0.62 + rD.g * 0.26 + rM.r * 0.12;
+      if (f > 0.18 + 0.76 * rag) discard;
+      rCol = mix(rCol, soil * 0.9, f * 0.6);
     }
     rRough = 0.95;
     rBumpH = pb;
@@ -298,12 +307,17 @@ const SURFACE = /* glsl */ `
     rSnowK = 1.0;
   } else if (rKind < 6.5) {
     // ── rail ballast ──
-    // two pebble scales: fine stones + coarse clumps that survive minification
-    float pb = mix(rD.g, texture2D(uDetail, rUV / 11.0 + 0.31).g, 0.45);
-    rCol = mix(vec3(0.1, 0.096, 0.09), vec3(0.3, 0.285, 0.26), pb) * (0.85 + 0.3 * rM.r);
-    // rust-stained ballast between and along the rails
-    float rustZone = rJunc ? 0.0 : (1.0 - smoothstep(0.2, 1.3, abs(abs(rs) - 2.0)));
-    rCol = mix(rCol, vec3(0.16, 0.1, 0.065) * (0.7 + 0.6 * pb), rustZone * 0.35);
+    // two pebble scales: ~5 cm stones + coarse clumps that survive minification
+    float pb = mix(texture2D(uDetail, rUV / 7.0 + 0.13).g, texture2D(uDetail, rUV / 17.0 + 0.31).g, 0.35);
+    rCol = mix(vec3(0.045, 0.043, 0.041), vec3(0.21, 0.195, 0.175), smoothstep(0.1, 0.8, pb)) * (0.85 + 0.3 * rM.r);
+    if (!rJunc) {
+      // brake dust / rust along each track, oily darker four-foot between the rails,
+      // dustier weathered shoulders toward the toe of the bed
+      float ax = abs(abs(rs) - 2.0);
+      rCol = mix(rCol, vec3(0.13, 0.085, 0.055) * (0.6 + 0.8 * pb), 0.42 * (1.0 - smoothstep(0.3, 1.5, ax)));
+      rCol *= 1.0 - 0.28 * (1.0 - smoothstep(0.5, 0.75, ax));
+      rCol = mix(rCol, vec3(0.3, 0.285, 0.26) * (0.75 + 0.5 * pb), 0.3 * smoothstep(3.4, 5.0, abs(rs)));
+    }
     rRough = 0.95;
     rBumpH = pb;
     rBumpK = 0.7;
@@ -356,7 +370,7 @@ const SURFACE = /* glsl */ `
     rSnowK = vRWNormal.y > 0.7 ? 0.6 : 0.0;
   } else if (rKind < 10.5) {
     // ── concrete sleeper ──
-    rCol = vec3(0.235, 0.228, 0.215) * (0.8 + 0.35 * rD.a) * (0.9 + 0.2 * rM.r);
+    rCol = vec3(0.17, 0.165, 0.155) * (0.8 + 0.35 * rD.a) * (0.9 + 0.2 * rM.r);
     rRough = 0.9;
     rSnowK = vRWNormal.y > 0.7 ? 0.6 : 0.0;
   } else if (rKind < 11.5) {

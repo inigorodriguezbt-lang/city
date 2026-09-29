@@ -328,41 +328,47 @@ export function updateService(ctx: SimContext, b: Building, k: number): void {
   finish(ctx, b, bs, before);
 }
 
-/** Distribute the day's collected garbage / bodies to processors and storage sites. */
-export function settleStorage(ctx: SimContext): void {
-  const a = ctx.agg;
-  // garbage: processors first, the rest goes into landfills proportionally to their intake
-  let rest = Math.max(0, a.garbageCollected - a.gbThroughput);
-  if (rest > 0 && a.landfills.length) {
+/**
+ * Put `amount` units into storage sites (landfills / cemeteries) proportionally to
+ * their intake weight; whatever a site cannot take (it filled up) spills over to
+ * the others. Returns what could not be stored anywhere.
+ */
+function fillStorage(sites: Building[], amount: number): number {
+  let rest = amount;
+  for (let pass = 0; pass < 3 && rest > 1e-6; pass++) {
     let total = 0;
-    const intakes: number[] = [];
-    for (const b of a.landfills) {
-      const def = defOf(b.defId);
-      const v = (def?.vehicles?.count ?? 4) * Math.max(0.05, b.efficiency);
-      intakes.push(v);
-      total += v;
+    for (const b of sites) {
+      const cap = defOf(b.defId)?.capacity ?? 0;
+      if (bsim(b).st < cap) total += intakeWeight(b);
     }
-    for (let i = 0; i < a.landfills.length && rest > 0; i++) {
-      const b = a.landfills[i];
-      const def = defOf(b.defId);
-      const cap = def?.capacity ?? 0;
+    if (total <= 0) break;
+    const round = rest;
+    for (const b of sites) {
+      const cap = defOf(b.defId)?.capacity ?? 0;
       const bs = bsim(b);
-      const share = total > 0 ? (a.garbageCollected - a.gbThroughput) * (intakes[i] / total) : 0;
-      const put = Math.min(share, Math.max(0, cap - bs.st), rest);
+      const room = cap - bs.st;
+      if (room <= 0) continue;
+      const put = Math.min(room, (round * intakeWeight(b)) / total, rest);
       bs.st += put;
       rest -= put;
     }
   }
-  // bodies: crematoria first, then cemeteries
-  let bodies = Math.max(0, a.bodiesCollected - a.dcThroughput);
-  if (bodies > 0 && a.cemeteries.length) {
-    const per = bodies / a.cemeteries.length;
-    for (const b of a.cemeteries) {
-      const cap = defOf(b.defId)?.capacity ?? 0;
-      const bs = bsim(b);
-      const put = Math.min(per, Math.max(0, cap - bs.st), bodies);
-      bs.st += put;
-      bodies -= put;
-    }
-  }
+  return rest;
+}
+
+function intakeWeight(b: Building): number {
+  return (defOf(b.defId)?.vehicles?.count ?? 4) * Math.max(0.05, b.efficiency);
+}
+
+/**
+ * Distribute the collected garbage / bodies of the finished day pass (covering
+ * `dtDays` days) to processors first and storage sites after.
+ */
+export function settleStorage(ctx: SimContext, dtDays = 1): void {
+  const a = ctx.agg;
+  const days = Math.max(1, dtDays);
+  const garbage = Math.max(0, a.garbageCollected - a.gbThroughput * days);
+  if (garbage > 0 && a.landfills.length) fillStorage(a.landfills, garbage);
+  const bodies = Math.max(0, a.bodiesCollected - a.dcThroughput * days);
+  if (bodies > 0 && a.cemeteries.length) fillStorage(a.cemeteries, bodies);
 }

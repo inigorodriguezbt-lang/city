@@ -81,10 +81,10 @@ function buildTree(ctx: ModelContext, sp: TreeSpecies, variant: number): Kit {
         k.pipe('bark', [0, h * 0.8, 0], [1.2, h + 1.4, 0.3], 0.14, C.bark, 5);
         k.pipe('bark', [0, h * 0.85, 0], [-0.9, h + 1.6, -0.6], 0.13, C.bark, 5);
       }
-      foliageBlob(k, 0, h + R * 0.72, 0, R, R * 0.82, R, base, variant * 3 + 1, 0.2, det);
+      foliageBlob(k, 0, h + R * 0.9, 0, R, R * 0.8, R, base, variant * 3 + 1, 0.2, det);
       if (!lo) {
-        foliageBlob(k, R * 0.55, h + R * 0.45, R * 0.25, R * 0.62, R * 0.55, R * 0.62, jitter(base, () => r.next(), 0.08), variant * 3 + 2, 0.25, det);
-        foliageBlob(k, -R * 0.5, h + R * 0.55, -R * 0.35, R * 0.6, R * 0.52, R * 0.6, jitter(base, () => r.next(), 0.08), variant * 3 + 3, 0.25, det);
+        foliageBlob(k, R * 0.55, h + R * 0.62, R * 0.25, R * 0.62, R * 0.55, R * 0.62, jitter(base, () => r.next(), 0.08), variant * 3 + 2, 0.25, det);
+        foliageBlob(k, -R * 0.5, h + R * 0.72, -R * 0.35, R * 0.6, R * 0.52, R * 0.6, jitter(base, () => r.next(), 0.08), variant * 3 + 3, 0.25, det);
       }
       break;
     }
@@ -238,7 +238,7 @@ export function tree(k: Kit, sp: TreeSpecies, x: number, z: number, scale = 1, r
 /** Pick a theme species (optionally restricted to broadleaf / conifer / decorative). */
 export function themeTree(ctx: ModelContext, kind: 'any' | 'shade' | 'formal' | 'conifer' = 'any'): TreeSpecies {
   const trees = ctx.theme.trees;
-  const shade: TreeSpecies[] = ['oak', 'maple', 'willow', 'cherry', 'acacia', 'olive', 'palm', 'birch'];
+  const shade: TreeSpecies[] = ['oak', 'maple', 'cherry', 'acacia', 'olive', 'palm', 'birch'];
   const formal: TreeSpecies[] = ['cypress', 'palm', 'birch', 'cherry', 'maple', 'oak'];
   const conifer: TreeSpecies[] = ['spruce', 'pine', 'cypress'];
   const want = kind === 'shade' ? shade : kind === 'formal' ? formal : kind === 'conifer' ? conifer : null;
@@ -282,7 +282,7 @@ export function flowerBed(k: Kit, cx: number, cz: number, w: number, d: number, 
 }
 
 // ── street furniture ──────────────────────────────────────────────────────
-export function lampPost(k: Kit, x: number, z: number, h = 4.6, color: ColorLike = 0x2a2e33, light = C.lampWarm, style: 'modern' | 'classic' = 'classic'): void {
+export function lampPost(k: Kit, x: number, z: number, h = 4.6, color: ColorLike = 0x2a2e33, light: number = C.lampWarm, style: 'modern' | 'classic' = 'classic'): void {
   k.cyl('metal', x, 0, z, 0.1, 0.07, h, color, 6);
   if (style === 'classic') {
     k.cyl('metal', x, 0, z, 0.2, 0.14, 0.6, color, 6);

@@ -162,12 +162,34 @@ const M: Record<string, (k: Kit) => number> = {
     k.lot('grass', lawnColor(k.ctx, 0.65), 0.2, 0.04);
     // three modern buildings around a courtyard with a glass atrium link
     const wc = mix(look.wallColor, 0xe8e4dc, 0.5);
+    const accent = k.ctx.rng.pick([0xe9812f, 0x2aa6a0, 0xd8412f, 0x3f9a4a, 0x2f6fd0]);
     const t1 = civicBlock(k, look, 0, 20, 36, 12, 4, { color: wc, roof: 'flat', wall: 'wall_office' });
-    civicBlock(k, look, -15, -8, 12, 30, 3, { color: wc, roof: 'flat', wall: 'wall_office' });
-    civicBlock(k, look, 15, -10, 12, 26, 3, { color: shade(wc, 0.95), roof: 'flat', wall: 'wall_glass' });
+    // coloured sun-shading fins across the teaching block's facade
+    for (let i = 0; i < 12; i++) k.box('plain', -16.5 + i * 3, 3.6, 26.3, 0.3, t1 - 4.6, 0.7, mix(accent, 0xffffff, (i % 3) * 0.16));
+    const t2 = civicBlock(k, look, -15, -8, 12, 30, 3, { color: wc, roof: 'flat', wall: 'wall_office', hvac: false });
+    if (!k.lo) for (let i = 0; i < 6; i++) k.at(0, t2 - 0.2, 0, 0, () => solarRow(k, -15, -20 + i * 4.6, 9.5, 2.6, 0.45, 0.5));
+    // round lecture-theatre drum with concrete fins and a green roof
+    const dx = 14, dz = -9, R = 9, s = k.seg(28);
+    k.cyl('wall_glass', dx, 0, dz, R, R, 11, 0xbcd6e4, s, false);
+    k.cyl('plain', dx, 11, dz, R + 0.4, R + 0.4, 1.3, wc, s, false);
+    k.disc('grass', dx, 12.3, dz, R + 0.4, lawnColor(k.ctx, 0.85), s);
+    k.torus('plain', dx, 12.3, dz, R + 0.35, 0.15, shade(wc, 0.9), s, 4);
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      k.rbox('concrete', dx + Math.cos(a) * (R + 0.3), 0, dz + Math.sin(a) * (R + 0.3), 0.35, 11, 0.9, Math.PI / 2 - a, wc);
+    }
     k.box('wall_glass', 0, 0, 12, 12, 9, 5, 0xbcd6e4, { top: 'glass', topColor: 0xa8c8d8 });
     k.entrance(0, 26.2, 5, 3.2, true);
-    k.sign(0, 11.2, 26.3, 12, 1.2, 0x2f6fd0, 0x9fc8ff);
+    k.sign(0, 11.2, 26.3, 12, 1.2, accent, 0xfff0d8);
+    // campus sign, flags and bike racks on the front lawn
+    k.box('wall_stone', 13, 0, 29.3, 10, 1.7, 0.8, C.stone, { top: 'plain', topColor: shade(C.stone, 1.05) });
+    k.word('CAMPUS', 13, 0.4, 29.72, 0.9, shade(accent, 0.7), 'plain', 0.05);
+    k.light(13, 0.6, 30.6, C.lampWarm, 3, 'lamp');
+    flagpole(k, -8, 29, 9, accent, 0xf4f4f4);
+    for (let i = 0; i < 6; i++) {
+      const bx = -15 + i * 1.1, bz = 29;
+      k.polyPipe('metal', [[bx, 0, bz - 0.4], [bx, 0.8, bz - 0.4], [bx, 0.8, bz + 0.4], [bx, 0, bz + 0.4]], 0.04, 0x8a8e92, 4);
+    }
     // courtyard: lawn, crossing paths, trees, benches, students
     k.slab('grass', 0, -6, 18, 26, 0.08, lawnColor(k.ctx, 0.75), 0.1);
     k.ribbon('paving', [[0, 10], [0, -19]], 3, 0.11, 0xd8d2c4);
@@ -234,6 +256,20 @@ const M: Record<string, (k: Kit) => number> = {
     for (let i = 0; i < 12; i++) k.box('plain', -17 + i * 3.1, 8, 11.05, 0.35, 9.5, 0.5, 0xd8d4c8, { top: false });
     k.box('glass', 2, 12, 11.1, 37, 3.4, 0.08, 0x4a6478, { top: false });
     k.parapet(2, 17.5, -2, 40, 26, 0.7, 0xdad6ce);
+    // roof: north-light skylight ribbons over the reading room + a roof garden
+    for (let i = 0; i < 3; i++) {
+      const z = -11 + i * 6.5;
+      k.box('metal', -4, 17.5, z, 26, 0.5, 2.8, 0xb8bcc0, { top: false });
+      k.quad('glass', { x: -17, y: 18, z: z + 1.4 }, { x: 9, y: 18, z: z + 1.4 }, { x: 9, y: 19.4, z: z - 1.4 }, { x: -17, y: 19.4, z: z - 1.4 }, [[0, 0], [26, 0], [26, 3], [0, 3]], 0x9fc4d8, { x: 0, y: 1, z: 1 });
+      k.box('metal', -4, 18, z - 1.45, 26, 1.4, 0.1, 0xb8bcc0, { top: false });
+      k.light(-4, 18.6, z, 0xfff0d0, 5, 'lamp');
+    }
+    k.box('concrete', 16.5, 17.5, -2, 9, 0.45, 23, 0x9a968d, { top: 'grass', topColor: lawnColor(k.ctx, 0.8) });
+    k.at(0, 17.95, 0, 0, () => {
+      for (let i = 0; i < 6; i++) bush(k, 14 + (i % 2) * 5, -11 + i * 3.8, 0.9 + (i % 3) * 0.2, 0x4f7d38, i);
+      k.box('wood', 16.5, 0, 4, 6, 0.1, 4, C.woodLight);
+      for (const x of [14.5, 18.5]) bench(k, x, 7.5, Math.PI);
+    });
     for (const [x, z] of [[-17, 10], [21, 10], [-17, -14], [21, -14]] as P2[]) k.cyl('concrete', x, 0, z, 0.45, 0.45, 8, 0xdad6ce, 10);
     k.light(0, 7, 8, 0xfff0d0, 8, 'lamp');
     // amphitheatre steps + reading lawn

@@ -25,14 +25,14 @@ import type { World } from '../../world/World';
 import { BFlag, Dir, Layer, Problem, ZoneType, type Building, type Rect } from '../../core/types';
 import { CELL } from '../../core/constants';
 import { ChunkGrid } from '../../core/chunks';
-import { RNG, hash2, hashString } from '../../core/rng';
+import { RNG, hash2, hash3, hashString } from '../../core/rng';
 import { styleDef } from '../../data/styles';
 import { themeDef } from '../../data/themes';
 import { zoneById, zoneDef } from '../../data/zones';
 import { buildingDef } from '../../data/buildings';
 import { getModel } from './registry';
 import type { ModelContext, ModelEmitter, ModelLight, ModelPart, ModelResult } from './types';
-import { getAnimDepthMaterials, getChunkMaterial, ghostMaterial, updateMaterials } from './materials';
+import { getAnimDepthMaterials, getChunkMaterial, ghostMaterial, setMaterialWeather, updateMaterials } from './materials';
 import { buildZoned, schedFor } from './zoned';
 import { civicFallback } from './zoned/civic';
 import { constructionModel, constructionStage, rubbleModel, weatherModel } from './zoned/states';
@@ -50,6 +50,11 @@ const BUDGET_MS = 4;
 /** cached detailed geometry budget (vertices) before far models drop their geometry */
 const VERT_BUDGET = 2_600_000;
 const ICON_RANGE = 1500;
+/** GPU vertex budget for detailed chunks (≈38 B/vertex → ~210 MB); beyond it
+ *  the detail radius shrinks (nearest chunks keep their detail) */
+const DETAIL_VERT_BUDGET = 5_500_000;
+/** vertex estimate for a building whose model has not been generated yet */
+const EST_VERTS = 3600;
 const EMPTY_F32 = new Float32Array(0);
 
 type Mode = 0 | 1 | 2; // hidden, lod, detail
@@ -75,6 +80,10 @@ interface BInfo {
   ground: number;
   key: string;
   sig: number;
+  /** numeric digest of everything in the model key (cheap change detection) */
+  geo: number;
+  /** last world-change pass that visited this building */
+  stamp: number;
   info: number;
   model: CachedModel | null;
   emitters: number[];
@@ -105,6 +114,8 @@ interface DetailChunk {
   ranges: Map<number, [number, number, number, number]>;
   /** lamp/neon glow needs rebuilding (a building's lights switched on/off) */
   glowDirty: boolean;
+  /** estimated detailed vertex count (for the detail budget) */
+  est: number;
 }
 
 interface LodChunk {
@@ -119,7 +130,11 @@ interface LodChunk {
   groupsSig: string;
   cx: number;
   cz: number;
+  /** squared distance to the camera (rebuild ordering) */
+  dist: number;
 }
+
+const byDist = (a: { dist: number }, b: { dist: number }): number => a.dist - b.dist;
 
 const ROT_ANGLE: Record<number, number> = { [Dir.S]: 0, [Dir.E]: Math.PI / 2, [Dir.N]: Math.PI, [Dir.W]: -Math.PI / 2 };
 
@@ -145,12 +160,17 @@ export class BuildingRenderer {
   private frame = 0;
   private refineQueue: number[] = [];
   private refineDirty = new Set<number>();
-  private detailSig = '';
+  private detailSig = 0;
   private settingsSig = '';
   private hl: { id: number; color: THREE.Color; mesh: THREE.Group } | null = null;
   private hlMat: THREE.ShaderMaterial | null = null;
   private tmpV = new THREE.Vector3();
+  private stampSeq = 0;
   private pendingDetail: DetailChunk[] = [];
+  private candidates: DetailChunk[] = [];
+  private lodDirty: LodChunk[] = [];
+  private readonly byDetailPriority = (a: DetailChunk, b: DetailChunk): number => (a.mode === 2 ? a.dist * 0.85 : a.dist) - (b.mode === 2 ? b.dist * 0.85 : b.dist);
+  private detailSet = new Set<number>();
   /** finished models of buildings under construction (LRU, keyed without state) */
   private fullCache = new Map<string, ZModel>();
 
@@ -213,9 +233,10 @@ export class BuildingRenderer {
     const fw = n ? b.w : b.h, fd = n ? b.h : b.w;
     const cx = (b.x + b.w / 2) * CELL, cz = (b.y + b.h / 2) * CELL;
     const chunk = this.detailGrid.chunkOfCell(Math.min(this.world.size - 1, Math.floor(b.x + b.w / 2)), Math.min(this.world.size - 1, Math.floor(b.y + b.h / 2)));
-    const bi: BInfo = { b, chunk, matrix: new THREE.Matrix4(), ground: 0, key: '', sig: 0, info: 0, model: null, emitters: [], cx, cz, fw, fd };
+    const bi: BInfo = { b, chunk, matrix: new THREE.Matrix4(), ground: 0, key: '', sig: 0, geo: 0, stamp: 0, info: 0, model: null, emitters: [], cx, cz, fw, fd };
     this.placeBuilding(bi);
     bi.key = this.modelKey(b, fw, fd);
+    bi.geo = this.geoDigest(b);
     bi.sig = this.signature(b);
     bi.info = this.infoOf(b);
     this.binfo.set(b.id, bi);
@@ -252,6 +273,7 @@ export class BuildingRenderer {
     const key = this.modelKey(bi.b, bi.fw, bi.fd);
     const info = this.infoOf(bi.b);
     const sig = this.signature(bi.b);
+    bi.geo = this.geoDigest(bi.b);
     if (key !== bi.key) {
       this.releaseModel(bi);
       bi.key = key;
@@ -295,7 +317,9 @@ export class BuildingRenderer {
   }
 
   private onWorldChanged(r: Rect, layers: number): void {
-    if (!this.world || !this.detailGrid || !(layers & Layer.Terrain)) return;
+    if (!this.world || !this.detailGrid) return;
+    if (layers & Layer.Building) this.recheckRect(r);
+    if (!(layers & Layer.Terrain)) return;
     const g = this.detailGrid;
     const n = g.chunksPerSide;
     const c0x = Math.max(0, Math.floor((r.x0 - 1) / DETAIL_CHUNK)), c1x = Math.min(n - 1, Math.floor((r.x1 + 1) / DETAIL_CHUNK));
@@ -313,6 +337,24 @@ export class BuildingRenderer {
           this.placeBuilding(bi);
           if (Math.abs(old - bi.ground) > 0.01) this.markChunk(bi.chunk);
         }
+      }
+  }
+
+  /** buildings touched through the world's dirty rects (state mutated without an event) */
+  private recheckRect(r: Rect): void {
+    const w = this.world!;
+    const x0 = Math.max(0, r.x0), y0 = Math.max(0, r.y0), x1 = Math.min(w.size - 1, r.x1), y1 = Math.min(w.size - 1, r.y1);
+    // whole-map rects (load, terraform brushes) are left to the round-robin poll
+    if ((x1 - x0 + 1) * (y1 - y0 + 1) > 4096) return;
+    const stamp = ++this.stampSeq;
+    for (let y = y0; y <= y1; y++)
+      for (let x = x0; x <= x1; x++) {
+        const id = w.bldg[y * w.size + x];
+        if (!id) continue;
+        const bi = this.binfo.get(id);
+        if (!bi || bi.stamp === stamp) continue;
+        bi.stamp = stamp;
+        if (this.geoDigest(bi.b) !== bi.geo || this.infoOf(bi.b) !== bi.info || this.signature(bi.b) !== bi.sig) this.refresh(bi, false);
       }
   }
 
@@ -363,7 +405,7 @@ export class BuildingRenderer {
     let c = this.dchunks.get(key);
     if (!c) {
       const [x, y] = this.detailGrid!.coords(key);
-      c = { key, ids: new Set(), cx: (x + 0.5) * DETAIL_CHUNK * CELL, cz: (y + 0.5) * DETAIL_CHUNK * CELL, mode: 1, clean: false, ready: false, mesh: null, anim: null, glow: null, dist: Infinity, job: null, jobIds: [], ranges: new Map(), glowDirty: false };
+      c = { key, ids: new Set(), cx: (x + 0.5) * DETAIL_CHUNK * CELL, cz: (y + 0.5) * DETAIL_CHUNK * CELL, mode: 1, clean: false, ready: false, mesh: null, anim: null, glow: null, dist: Infinity, job: null, jobIds: [], ranges: new Map(), glowDirty: false, est: 0 };
       this.dchunks.set(key, c);
     }
     return c;
@@ -378,7 +420,7 @@ export class BuildingRenderer {
     let c = this.lchunks.get(key);
     if (!c) {
       const [x, y] = this.lodGrid!.coords(key);
-      c = { key, mesh: null, glow: null, clean: false, ranges: new Map(), bRanges: new Map(), groupsSig: '', cx: (x + 0.5) * LOD_CHUNK * CELL, cz: (y + 0.5) * LOD_CHUNK * CELL };
+      c = { key, mesh: null, glow: null, clean: false, ranges: new Map(), bRanges: new Map(), groupsSig: '', cx: (x + 0.5) * LOD_CHUNK * CELL, cz: (y + 0.5) * LOD_CHUNK * CELL, dist: 0 };
       this.lchunks.set(key, c);
     }
     return c;
@@ -398,6 +440,13 @@ export class BuildingRenderer {
     if (b.flags & BFlag.Burned) return 'b';
     if (b.flags & BFlag.Abandoned) return 'a';
     return 'n';
+  }
+
+  /** numeric digest of the model key inputs (no allocation) */
+  private geoDigest(b: Building): number {
+    const st = b.flags & BFlag.Collapsed ? 1 : b.built < 1 ? 16 + constructionStage(b.built) : b.flags & BFlag.Burned ? 2 : b.flags & BFlag.Abandoned ? 3 : 0;
+    const lv = b.kind === 'zoned' ? b.level : 1;
+    return hash3(lv | (st << 4) | ((STYLE_INDEX[b.style] ?? 0) << 10), b.seed, b.zone * 131 + b.w * 7 + b.h);
   }
 
   private modelKey(b: Building, fw: number, fd: number): string {
@@ -582,6 +631,8 @@ export class BuildingRenderer {
     const night = game.renderer.lighting.night;
     const hour = this.world?.time.hour ?? 12;
     updateMaterials(night, game.time, hour, game.time);
+    const shared = (game.renderer as { shared?: { uWetness?: { value: number }; uSnow?: { value: number } } }).shared;
+    setMaterialWeather(shared?.uWetness?.value ?? 0, shared?.uSnow?.value ?? 0);
     const viewH = game.renderer.renderer.domElement.height || 800;
     updateGlow(night, game.time, viewH);
     this.icons.update(game.time, viewH);
@@ -606,28 +657,43 @@ export class BuildingRenderer {
     }
   }
 
-  /** distance-based mode per detail chunk (with hysteresis) */
+  /** distance-based mode per detail chunk (with hysteresis), nearest chunks
+   *  first until the detailed vertex budget is spent */
   private classify(cam: THREE.Vector3): void {
     const g = this.game.settings.value.graphics;
-    const dk = g.buildingDetail === 'low' ? 0.65 : g.buildingDetail === 'medium' ? 0.9 : 1.2;
-    const detailD = 900 * dk;
+    const dk = g.buildingDetail === 'low' ? 0.6 : g.buildingDetail === 'medium' ? 0.8 : 1.0;
+    const detailD = 820 * dk;
     const renderD = Math.max(1500, (g.renderDistance ?? 10) * 32 * CELL);
     const alt = Math.max(0, cam.y - (this.world?.heightAt(cam.x, cam.z) ?? 0));
-    let sig = '';
+    const reEstimate = this.frame % 8 === 0;
+    const cand = this.candidates;
+    cand.length = 0;
     for (const c of this.dchunks.values()) {
       const dx = c.cx - cam.x, dz = c.cz - cam.z;
       const d = Math.sqrt(dx * dx + dz * dz + alt * alt * 0.6);
       c.dist = d;
-      let mode: Mode;
-      if (d > renderD) mode = 0;
-      else if (d < detailD - DETAIL_CHUNK * CELL * 0.35 || (c.mode === 2 && d < detailD * 1.12)) mode = 2;
-      else mode = 1;
-      if (!c.ids.size) mode = mode === 2 ? 2 : mode;
+      if (c.ids.size && (d < detailD - DETAIL_CHUNK * CELL * 0.35 || (c.mode === 2 && d < detailD * 1.12))) {
+        if (reEstimate || c.est === 0) c.est = this.estimateVerts(c);
+        cand.push(c);
+      }
+    }
+    // nearest first; chunks already shown in detail win ties at the budget edge
+    cand.sort(this.byDetailPriority);
+    let spent = 0;
+    this.detailSet.clear();
+    for (const c of cand) {
+      if (spent + c.est > DETAIL_VERT_BUDGET && spent > 0) break;
+      spent += c.est;
+      this.detailSet.add(c.key);
+    }
+    let sig = 0;
+    for (const c of this.dchunks.values()) {
+      const mode: Mode = c.dist > renderD ? 0 : this.detailSet.has(c.key) ? 2 : 1;
       if (mode !== c.mode) {
         if (c.mode === 2 && mode !== 2) this.leaveDetail(c);
         c.mode = mode;
       }
-      if (mode === 2 && c.ready) sig += c.key + ',';
+      if (mode === 2 && c.ready) sig = (Math.imul(sig ^ (c.key + 1), 0x9e3779b1) + 0x7f4a7c15) | 0;
     }
     if (sig !== this.detailSig) {
       this.detailSig = sig;
@@ -639,6 +705,16 @@ export class BuildingRenderer {
       if (l.mesh) l.mesh.visible = vis;
       if (l.glow) l.glow.visible = vis;
     }
+  }
+
+  /** detailed vertex estimate of a chunk (generated models are exact) */
+  private estimateVerts(c: DetailChunk): number {
+    let n = 0;
+    for (const id of c.ids) {
+      const m = this.binfo.get(id)?.model;
+      n += m && !m.provisional ? m.verts : EST_VERTS;
+    }
+    return Math.max(1, n);
   }
 
   private leaveDetail(c: DetailChunk): void {
@@ -670,9 +746,7 @@ export class BuildingRenderer {
         continue;
       }
       this.pollCursor++;
-      const sig = this.signature(bi.b);
-      const info = this.infoOf(bi.b);
-      if (sig !== bi.sig || info !== bi.info) this.refresh(bi, false);
+      if (this.signature(bi.b) !== bi.sig || this.infoOf(bi.b) !== bi.info || this.geoDigest(bi.b) !== bi.geo) this.refresh(bi, false);
     }
   }
 
@@ -685,7 +759,7 @@ export class BuildingRenderer {
       else if (c.glowDirty) this.rebuildGlow(c);
     }
     if (!pending.length) return;
-    pending.sort((a, b) => a.dist - b.dist);
+    pending.sort(byDist);
     let first = true;
     for (const c of pending) {
       if (!first && performance.now() - t0 > BUDGET_MS) break;
@@ -764,7 +838,7 @@ export class BuildingRenderer {
       const bi = this.binfo.get(id);
       if (bi) this.syncEmitters(bi);
     }
-    this.detailSig = '';
+    this.detailSig = -1;
   }
 
   /** lamp / neon / floodlight sprites of a detail chunk (beacons live in the LOD glow) */
@@ -789,13 +863,21 @@ export class BuildingRenderer {
     if (c.glow) this.glowGroup.add(c.glow);
   }
 
+  /** dirty LOD chunks, nearest first, within what is left of the frame budget
+   *  (one is forced every other frame so the far city always converges) */
   private rebuildLod(t0: number): void {
-    let first = true;
-    for (const l of this.lchunks.values()) {
-      if (l.clean) continue;
-      if (!first && performance.now() - t0 > BUDGET_MS * 1.25) break;
+    const dirty = this.lodDirty;
+    dirty.length = 0;
+    for (const l of this.lchunks.values()) if (!l.clean) dirty.push(l);
+    if (!dirty.length) return;
+    const cam = this.game.renderer.camera.position;
+    for (const l of dirty) l.dist = (l.cx - cam.x) ** 2 + (l.cz - cam.z) ** 2;
+    dirty.sort(byDist);
+    let forced = this.frame % 2 === 0;
+    for (const l of dirty) {
+      if (performance.now() - t0 > BUDGET_MS && !forced) break;
+      forced = false;
       this.mergeLodChunk(l);
-      first = false;
     }
   }
 
@@ -894,9 +976,9 @@ export class BuildingRenderer {
     }
     // always make a little progress so far LOD boxes converge even when the
     // detail rebuilds consume the whole frame budget
-    let n = 0;
-    while (this.refineQueue.length && (n < 1 || performance.now() - t0 < BUDGET_MS)) {
-      n++;
+    let forced = this.frame % 3 === 0;
+    while (this.refineQueue.length && (forced || performance.now() - t0 < BUDGET_MS)) {
+      forced = false;
       const id = this.refineQueue.pop()!;
       const bi = this.binfo.get(id);
       if (!bi || (bi.model && !bi.model.provisional)) continue;
@@ -1169,11 +1251,17 @@ export class BuildingRenderer {
       mesh.material = ghostMaterial(valid);
       (edge.material as THREE.LineBasicMaterial).color.set(valid ? 0xffffff : 0xff6a6a);
     };
-    grp.userData.dispose = () => {
+    let disposed = false;
+    const dispose = () => {
+      if (disposed) return;
+      disposed = true;
       merged.dispose();
       edge.geometry.dispose();
       (edge.material as THREE.Material).dispose();
     };
+    grp.userData.dispose = dispose;
+    // previews are throw-away objects: free their buffers once taken out of the scene
+    grp.addEventListener('removed', dispose);
     return grp;
   }
 

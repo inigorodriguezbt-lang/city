@@ -150,7 +150,7 @@ async function main(): Promise<void> {
   world.flushChanges();
   gr.onWorldLoaded(world);
   events.emit('world:loaded', world);
-  const cam = (qs.get('cam') ?? '').split(',').map(Number);
+  const cam = qs.has('cam') ? qs.get('cam')!.split(',').map(Number) : [];
   const cx = Number.isFinite(cam[0]) ? cam[0] : world.home.x, cy = Number.isFinite(cam[1]) ? cam[1] : world.home.y;
   gr.cameraCtl.setPose(cx, cy, Number.isFinite(cam[2]) ? cam[2] : 900, ((Number.isFinite(cam[3]) ? cam[3] : 35) * Math.PI) / 180, ((Number.isFinite(cam[4]) ? cam[4] : 38) * Math.PI) / 180);
   if (qs.has('overlay')) gr.setOverlay(qs.get('overlay') as FieldId);

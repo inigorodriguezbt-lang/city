@@ -281,6 +281,8 @@ const M: Record<string, (k: Kit) => number> = {
     tree(k, themeTree(k.ctx, 'shade'), -11, 10, 0.85);
     tree(k, themeTree(k.ctx, 'shade'), 11, -11, 0.8, 1, 1);
     k.cyl('metal', 12, 0, 1, 0.2, 0.25, 1, 0x5a6a7a, 6);
+    lampPost(k, -13, 1, 4.2);
+    lampPost(k, 13, -2, 4.2);
     return 5;
   },
 
@@ -368,10 +370,15 @@ const M: Record<string, (k: Kit) => number> = {
     const W = k.W, D = k.D;
     lawnLot(k, lawnColor(k.ctx, 0.5));
     k.slab('concrete', 0, 0, W - 4, D - 4, 0.12, 0xc8c4bc, 0.2);
-    // bowl
-    k.rev('concrete', -5, -0.2, -5, [[6.5, 0.3], [6, 0.1], [4.8, -1.4], [3, -2]], 0xb8b4ac, k.seg(20), { inside: true, crease: 80 });
-    k.disc('concrete', -5, -1.8, -5, 3.1, 0xa8a49c, k.seg(20));
-    k.torus('metal', -5, 0.3, -5, 6.5, 0.08, 0x888888, k.seg(20), 3);
+    // raised kidney bowl: berm outside, smooth transition down to a flat floor
+    const bx = -6, bz = -6, s = k.seg(24);
+    k.rev('concrete', bx, 0.13, bz, [[3.2, 0], [4.5, 0.25], [5.5, 0.9], [6.1, 1.9], [6.2, 2.2]], 0xb4b0a8, s, { inside: true, crease: 80 });
+    k.disc('concrete', bx, 0.15, bz, 3.3, 0xa9a59d, s);
+    k.ring('concrete', bx, 2.2, bz, 6.2, 6.6, 0xc8c4bc, s);
+    k.rev('concrete', bx, 0.1, bz, [[7.4, 0], [6.6, 2.1]], 0xbcb8b0, s, { crease: 80 });
+    k.torus('metal', bx, 2.22, bz, 6.22, 0.09, 0x8a8e92, s, 4);
+    k.box('plain', bx + 0.4, 0.16, bz - 1.2, 1.6, 0.02, 1.1, 0xe0503a);
+    k.box('plain', bx - 1.3, 0.16, bz + 0.8, 1.2, 0.02, 1.4, 0x3a8ad8);
     // half-pipe
     k.at(6, 0, 3, 0, () => {
       for (const s of [-1, 1]) {
@@ -389,14 +396,25 @@ const M: Record<string, (k: Kit) => number> = {
       }
       for (const s of [-1, 1]) k.quad('plain', { x: -5, y: 0.1, z: s * 4 }, { x: 5, y: 0.1, z: s * 4 }, { x: 5, y: 3.1, z: s * 4 }, { x: -5, y: 3.1, z: s * 4 }, [[0, 0], [1, 0], [1, 1], [0, 1]], [0x3a8ad8, 0xe8665a][s > 0 ? 0 : 1], { x: 0, y: 0, z: s });
     });
-    // funbox, rail, stairs
-    k.box('concrete', 5, 0.1, -8, 5, 0.9, 3, 0xbcb8b0);
-    k.quad('concrete', { x: 2.5, y: 0.1, z: -6.5 }, { x: 2.5, y: 0.1, z: -9.5 }, { x: 0.5, y: 0.1, z: -9.5 }, { x: 0.5, y: 0.1, z: -6.5 }, [[0, 0], [1, 0], [1, 1], [0, 1]], 0xbcb8b0);
-    k.box('metal', -6, 0.1, 8, 7, 0.06, 0.08, 0xd8d8d8);
-    k.box('metal', -9.4, 0.1, 8, 0.08, 0.7, 0.08, 0x999999);
-    k.box('metal', -2.6, 0.1, 8, 0.08, 0.7, 0.08, 0x999999);
+    // funbox with launch ramps, flat rail and a ledge
+    const fx = 7, fz = -9;
+    k.box('concrete', fx, 0.12, fz, 5, 0.9, 3, 0xbcb8b0);
+    for (const sx of [-1, 1]) {
+      const xa = fx + sx * 2.5, xb = fx + sx * 4.6;
+      k.quad('concrete', { x: xa, y: 1.02, z: fz - 1.5 }, { x: xa, y: 1.02, z: fz + 1.5 }, { x: xb, y: 0.13, z: fz + 1.5 }, { x: xb, y: 0.13, z: fz - 1.5 }, [[0, 0], [3, 0], [3, 2.3], [0, 2.3]], 0xc4c0b8, { x: sx * 0.4, y: 1, z: 0 });
+      for (const sz of [-1, 1]) k.tri('concrete', { x: xa, y: 0.13, z: fz + sz * 1.5 }, { x: xb, y: 0.13, z: fz + sz * 1.5 }, { x: xa, y: 1.02, z: fz + sz * 1.5 }, [0, 0], [2.1, 0], [0, 0.9], 0xa8a49c, { x: 0, y: 0, z: sz });
+    }
+    k.box('metal', fx, 1.02, fz, 4.8, 0.05, 0.08, 0xd8d8d8);
+    k.box('concrete', -3, 0.12, 9, 8, 0.55, 1.2, 0xa8a49c);
+    k.box('metal', -3, 0.67, 9.55, 8, 0.05, 0.1, 0x9a9ea2);
+    k.box('metal', 8, 0.1, 10.5, 7, 0.06, 0.08, 0xd8d8d8);
+    k.box('metal', 4.6, 0.1, 10.5, 0.08, 0.7, 0.08, 0x999999);
+    k.box('metal', 11.4, 0.1, 10.5, 0.08, 0.7, 0.08, 0x999999);
+    k.box('metal', 8, 0.7, 10.5, 7, 0.06, 0.06, 0xd8d8d8);
+    bench(k, -12, 12.5, 0);
+    bench(k, 1, 12.5, 0);
     const r = k.ctx.rng;
-    for (let i = 0; i < 5; i++) person(k, r.range(-10, 10), r.range(-10, 10), r.pick([0xd04040, 0x333333, 0xf2c230, 0x3a6fd8]), r.range(0, 6));
+    for (const [px, pz] of [[6, 3], [-2, 11.2], [10, -5], [-12, 4], [0, -12.5], [-6, -5]] as P2[]) person(k, px, pz, r.pick([0xd04040, 0x333333, 0xf2c230, 0x3a6fd8, 0xf4f4f4]), r.range(0, 6));
     lampsAlong(k, [[-W / 2 + 1.5, D / 2 - 1.5], [W / 2 - 1.5, D / 2 - 1.5]], 10, 5, 'modern', 0);
     tree(k, themeTree(k.ctx, 'shade'), W / 2 - 3, -D / 2 + 3, 0.7);
     return 5;
@@ -470,7 +488,13 @@ const M: Record<string, (k: Kit) => number> = {
     k.gableRoof('roof_tile', 16, 3.6, 13.5, 14, 4.5, 1.4, 0x3f6f4a, { overhang: 0.6, wallMat: 'wall_wood', wallColor: 0xf2eee4, ridgeAlongX: true });
     for (let i = 0; i < 3; i++) umbrella(k, -14 + i * 6, 14.2, 0x3f8a4a, 1.3, 2.3);
     for (let i = 0; i < 6; i++) person(k, -15.5 + (i % 3) * 15.5, -2 + (i < 3 ? -9 : 9), 0xf4f4f4, i < 3 ? 0 : Math.PI);
-    return 8;
+    // court floodlights on both fence lines
+    for (const z of [12.6, -D / 2 + 1.1]) for (const x of [-23.25, -7.75, 7.75, 23.25]) {
+      k.cyl('metal', x, 0, z, 0.13, 0.1, 9, 0x6a6e72, 6);
+      k.box('metal', x, 9, z + (z > 0 ? -0.35 : 0.35), 1.6, 0.5, 0.5, 0x3a3d42);
+      k.light(x, 8.9, z + (z > 0 ? -0.8 : 0.8), 0xf4f8ff, 7, 'flood');
+    }
+    return 9.5;
   },
 
   public_pool(k) {
@@ -510,6 +534,12 @@ const M: Record<string, (k: Kit) => number> = {
       k.ball('plain', px, 0.48, pz, 0.15, [0xe8c4a0, 0xc68e62, 0x8d5a3b][i % 3], 5, 3);
     }
     fence(k, [[-W / 2 + 0.6, D / 2 - 6], [-W / 2 + 0.6, -D / 2 + 0.6], [W / 2 - 0.6, -D / 2 + 0.6], [W / 2 - 0.6, D / 2 - 6]], 2, 0x5d6166, 2.6);
+    // underwater pool lights, lit sign, lamps by the changing block
+    for (const dx of [-8, 0, 8]) k.light(-6 + dx, 0.5, -4, 0x7fe0ff, 5, 'lamp');
+    k.light(14, 0.45, -6, 0x7fe0ff, 4, 'lamp');
+    k.light(0, 3, D / 2 - 0.6, 0x9fe0ff, 4, 'neon');
+    lampPost(k, -16, 8.6, 4.4, 0x2a2e33, C.lampCool, 'modern');
+    lampPost(k, 9, 8.6, 4.4, 0x2a2e33, C.lampCool, 'modern');
     return 8;
   },
 
@@ -643,6 +673,8 @@ const M: Record<string, (k: Kit) => number> = {
       const h = holes[i % 4];
       person(k, h.green[0] + r.range(-3, 3), h.green[1] + r.range(-3, 3), r.pick([0xf4f4f4, 0xd83a3a, 0x3a6fd8]), r.range(0, 6));
     }
+    for (const dx of [-7, 0, 7]) k.light(-4 + dx, 3.9, 45.4, C.lampWarm, 3, 'lamp');
+    lampsAlong(k, [[16, D / 2 - 6.5], [44, D / 2 - 6.5]], 12, 5, 'modern', 0);
     return 9;
   },
 

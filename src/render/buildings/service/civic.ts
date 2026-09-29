@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { Kit, type P2, type V3 } from './kit';
 import { C, shade, mix, lawnColor, civicLook, dryGround } from './colors';
 import { models } from './define';
-import { bench, bus, car, chimney, container, containerStack, conveyor, crowd, fence, flagpole, flowerBed, hedge, logPile, parkedCars, pile, sphereTank, tank, tractor, tree, themeTree, truck, umbrella, van } from './props';
+import { bench, bus, car, chimney, container, containerStack, conveyor, crowd, fence, flagpole, flowerBed, hedge, lampPost, logPile, parkedCars, person, pile, sphereTank, tank, tractor, tree, themeTree, truck, umbrella, van } from './props';
 import { antennaMast, archWindow, civicBlock, clockFace, hall, lampsAlong, pipeRack, portico, rollDoors, statueFigure } from './arch';
 
 // ── shared bits ────────────────────────────────────────────────────────────
@@ -198,34 +198,103 @@ const M: Record<string, (k: Kit) => number> = {
 
   radio_mast(k) {
     k.lot('grass', lawnColor(k.ctx, 0.35), 0.2, 0.04);
-    k.slab('dirt', 0, 0, 12, 12, 0.08, dryGround(k.ctx), 0.2);
-    const top = antennaMast(k, 0, -1, 112, 1.3, 0xf2f2f0, 0xd8412f, true);
-    k.box('wall_concrete', 4.5, 0, 4.5, 4, 3, 3.4, 0xd8d6d0, { top: 'roof_flat' });
-    for (let i = 0; i < 3; i++) k.push(new THREE.Matrix4().makeTranslation(0, 40 + i * 25, -1).multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2))).cylinder('metal', 0.9, -0.2, 0, 0.7, 0.7, 0.4, 0xf4f4f4, 10, { top: true, bottom: true }).pop();
-    fence(k, [[-6.5, -6.5], [6.5, -6.5], [6.5, 6.5], [-6.5, 6.5]], 2, 0x8a9096, 2.6, 'metal', true);
-    return top;
+    k.slab('dirt', 0, 0, 13, 13, 0.08, dryGround(k.ctx), 0.2);
+    // self-supporting broadcast tower: flared lattice legs in red/white bands
+    const H = 104, bands = 8, tz = -1;
+    const hw = (t: number) => 0.8 + 4.3 * Math.pow(1 - t, 2.4);
+    for (let i = 0; i < bands; i++) {
+      const t0 = i / bands, t1 = (i + 1) / bands;
+      k.lattice('metal', 0, tz, H * t0, H * t1, hw(t0), hw(t1), i % 2 ? 0xd8412f : 0xf2f2f0, Math.max(3, H / bands / 3), 0.34 - t0 * 0.18, 0.1);
+    }
+    for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]] as P2[]) k.box('concrete', sx * hw(0), 0, tz + sz * hw(0), 1.5, 0.6, 1.5, 0xb8b4aa);
+    // service platforms with microwave dishes, panel antennas near the top
+    for (const t of [0.42, 0.7]) {
+      const y = H * t, w = hw(t) * 2 + 1.4;
+      k.box('metal', 0, y, tz, w, 0.2, w, 0x8a8e92);
+      for (let d = 0; d < 3; d++) {
+        k.at(0, y + 0.9, tz, d * 2.1 + t * 3, () => {
+          k.push(new THREE.Matrix4().makeTranslation(0, 0, w / 2 + 0.3).multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2)));
+          k.cylinder('metal', 0, -0.2, 0, 0.85, 0.85, 0.45, 0xf4f4f4, 12, { top: true, bottom: true });
+          k.pop();
+        });
+      }
+    }
+    for (let a = 0; a < 6; a++) k.at(0, H * 0.86, tz, (a * Math.PI) / 3, () => k.box('metal', 0, 0, hw(0.86) + 0.35, 0.45, 2.6, 0.18, 0xe8e8e4));
+    k.cyl('metal', 0, H, tz, 0.35, 0.14, 14, 0xf2f2f0, 6);
+    for (const t of [0.33, 0.66, 1]) for (const s of [-1, 1]) k.light(s * (hw(t) + 0.2), H * t, tz, C.beaconRed, 3 + t * 2.5, 'beacon', true);
+    k.light(0, H + 14.2, tz, C.beaconRed, 5, 'beacon', true);
+    // equipment hut + fence
+    k.box('wall_concrete', 0, 0, tz, 3.6, 3, 3, 0xd8d6d0, { top: 'roof_flat' });
+    k.box('metal', 0, 0.05, tz + 1.52, 1, 2.1, 0.06, 0x5a6168);
+    k.light(0, 2.5, tz + 1.8, C.lampWarm, 2.4, 'lamp');
+    fence(k, [[-7, -7], [7, -7], [7, 7], [-7, 7]], 2, 0x8a9096, 2.6, 'metal', true);
+    return H + 14.4;
   },
 
   visitor_center(k) {
-    const W = k.W, D = k.D;
-    k.lot('grass', lawnColor(k.ctx, 0.7), 0.2, 0.04);
-    k.slab('paving', 0, 5, W - 4, 16, 0.08, 0xd8d0c0, 0.2);
-    // timber-and-glass pavilion with a floating roof
-    k.box('wall_glass', -2, 0, -4, 20, 4.2, 12, 0xbcd6e4, { top: false });
-    k.box('wood', -2, 4.2, -3, 26, 0.6, 18, C.woodLight, { bottom: true, top: 'grass', topColor: lawnColor(k.ctx, 0.8) });
-    for (const [x, z] of [[-14, 5], [10, 5], [-14, -11], [10, -11]] as P2[]) k.cyl('wood', x, 0, z, 0.25, 0.25, 4.2, C.wood, 8);
-    // big "i" totem, map boards, tour bus
+    const D = k.D;
+    const lawn = lawnColor(k.ctx, 0.7);
+    k.lot('grass', lawn, 0.2, 0.04);
+    k.slab('paving', -1, 7, 28, 16, 0.08, 0xd8d0c0, 0.2);
+    // timber-and-glass pavilion on a stone plinth
+    const px = -3, pz = -6.5;
+    k.box('wall_stone', px, 0, pz, 19, 0.35, 11, 0xb8ad98, { top: 'paving', topColor: 0xcfc6b4 });
+    k.box('wall_glass', px, 0.35, pz, 18, 4.2, 10, 0xbcd6e4, { top: false });
+    k.box('wall_stone', px, 0.35, pz - 4.75, 18.4, 4.2, 0.7, C.stone, { top: false });
+    for (let i = 0; i < 10; i++) k.box('wood', px - 8.5 + i * 1.9, 0.35, pz + 5.15, 0.16, 4.2, 0.45, C.woodLight, { top: false });
+    k.entrance(px, pz + 5.05, 3, 2.8, false, C.woodDark);
+    // sweeping green roof: timber soffit, sedum top, thick fascia
+    const x0 = -15, x1 = 9, z0 = -14, z1 = 2, t = 0.6;
+    const yb = (u: number, v: number) => 4.8 + 1.5 * Math.sin(Math.PI * u) + 0.6 * v;
+    const X = (u: number) => x0 + (x1 - x0) * u, Z = (v: number) => z0 + (z1 - z0) * v;
+    const nu = k.seg(16);
+    const sedum = mix(lawnColor(k.ctx, 0.9), 0x6b7a3a, 0.45);
+    k.surface('grass', nu, 3, (u, v) => [X(u), yb(u, 1 - v) + t, Z(1 - v)], sedum);
+    k.surface('wood', nu, 3, (u, v) => [X(u), yb(u, v), Z(v)], C.woodLight);
+    k.surface('wood', nu, 1, (u, v) => [X(u), yb(u, 1) + v * t, Z(1)], C.wood);
+    k.surface('wood', nu, 1, (u, v) => [X(u), yb(u, 0) + (1 - v) * t, Z(0)], C.wood);
+    k.surface('wood', 1, 1, (a, b) => [x0, yb(0, a) + b * t, Z(a)], C.wood);
+    k.surface('wood', 1, 1, (a, b) => [x1, yb(1, 1 - a) + b * t, Z(1 - a)], C.wood);
+    // V-shaped timber struts under the overhangs
+    for (const sx of [-12, -3, 6]) for (const sz of [0.8, -12.6]) {
+      const y = yb((sx - x0) / (x1 - x0), (sz - z0) / (z1 - z0));
+      k.pipe('wood', [sx, 0.05, sz], [sx - 1.5, y, sz], 0.15, C.wood, 6);
+      k.pipe('wood', [sx, 0.05, sz], [sx + 1.5, y, sz], 0.15, C.wood, 6);
+    }
+    for (const sx of [-10, -3, 4]) k.light(sx, 5, 0.5, C.lampWarm, 3.4, 'lamp');
+    // timber lookout tower with a shingled hat
+    const tx = 11, tz = -9;
+    k.lattice('wood', tx, tz, 0, 15, 2.2, 1.6, C.wood, 3.75, 0.32, 0.12);
+    k.box('wood', tx, 15, tz, 4.6, 0.3, 4.6, C.woodLight);
+    for (const [cx, cz] of [[-2.2, -2.2], [2.2, -2.2], [2.2, 2.2], [-2.2, 2.2]] as P2[]) k.box('wood', tx + cx, 15.3, tz + cz, 0.2, 2.9, 0.2, C.woodDark);
+    for (const s of [-1, 1]) {
+      k.box('wood', tx, 16.2, tz + s * 2.2, 4.4, 0.12, 0.1, C.woodDark);
+      k.box('wood', tx + s * 2.2, 16.2, tz, 0.1, 0.12, 4.4, C.woodDark);
+    }
+    k.pyramid('roof_shingle', tx, 18.2, tz, 5.4, 5.4, 1.9, 0x5a4636);
+    k.at(tx - 0.8, 15.3, tz + 1.2, 0.4, () => person(k, 0, 0, 0xd8412f));
+    k.light(tx, 17.9, tz, C.lampWarm, 3, 'lamp');
+    // big "i" totem, lit map boards, flags, tour bus
     k.box('metal', 10, 0, 9, 1.4, 5.5, 0.4, 0x2f7fd0);
     k.glyph('i', 10, 1.4, 9.22, 3.4, 0xf4f4f4, 'emissive', 0.06);
     k.light(10, 4, 9.8, 0x7fc0ff, 4, 'neon');
-    for (const x of [-8, -3]) {
-      k.box('metal', x, 0, 8, 0.1, 1, 0.1, 0x333333);
-      k.box('plain', x, 1, 8, 2.4, 1.6, 0.12, 0x3a6a4a);
+    for (const x of [-8.5, -5]) {
+      k.box('metal', x, 0, 9.5, 0.1, 1, 0.1, 0x333333);
+      k.box('plain', x, 1, 9.5, 2.4, 1.6, 0.12, 0x3a6a4a);
+      k.box('emissive', x, 1.15, 9.57, 2.1, 1.3, 0.02, 0xe8e0c8);
     }
-    bus(k, -2, D / 2 - 3, 0, 0xf2f2ee, 12);
-    crowd(k, 0, 5, 20, 8, 10);
-    tree(k, themeTree(k.ctx, 'shade'), 12, -11, 0.8);
-    return 5;
+    flags(k, -14, -11, 13, 3, 8);
+    flowerBed(k, -12, 7.5, 5, 2.5);
+    bus(k, 1.5, D / 2 - 2.6, 0, 0xf2f2ee, 12);
+    bench(k, -12, 4, 0);
+    bench(k, 5, 4, 0);
+    lampPost(k, -9.5, 12, 4.4);
+    lampPost(k, 6.5, 4.6, 4.4);
+    crowd(k, -2, 6, 18, 6, 10);
+    tree(k, themeTree(k.ctx, 'shade'), -14, -13, 0.8);
+    tree(k, themeTree(k.ctx, 'shade'), 13.5, 3, 0.75, 1, 1);
+    tree(k, themeTree(k.ctx, 'shade'), 13.5, 14, 0.7, 2, 2);
+    return 20.1;
   },
 
   hotel(k) {
@@ -473,7 +542,12 @@ const M: Record<string, (k: Kit) => number> = {
     k.box('wall_wood', -2, 0, 26, 12, 3.6, 6, 0xf0ece0, { top: false });
     k.gableRoof('roof_metal', -2, 3.6, 26, 12, 6, 1.6, 0x3f6a3a, { wallMat: 'wall_wood', wallColor: 0xf0ece0 });
     truck(k, -22, 8, Math.PI / 2, 0x3f6a3a, 0xd8c070, 'box', 11);
-    return 30;
+    // yard lights, beacon on the headhouse
+    k.light(bx, 6.2, bz + 11.6, C.lampWarm, 4, 'lamp');
+    k.light(-14, 5, 22.6, C.lampWarm, 3.5, 'lamp');
+    k.light(-2, 2.9, 29.4, C.lampWarm, 2.6, 'lamp');
+    k.light(-15, 31.3, -30, C.beaconRed, 3, 'beacon', true);
+    return 31;
   },
 
   lumber_yard(k) {

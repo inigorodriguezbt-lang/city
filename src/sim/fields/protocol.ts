@@ -84,8 +84,8 @@ export enum Role {
 export function effluentShare(role: Role): number {
   switch (role) {
     case Role.Outlet: return 1;
-    case Role.SewageTreatment: return 0.14;
-    case Role.SewageTreatmentAdv: return 0.03;
+    case Role.SewageTreatment: return 0.08;
+    case Role.SewageTreatmentAdv: return 0.015;
     default: return 0;
   }
 }
@@ -126,6 +126,11 @@ export function needsCable(def: BuildingDef | undefined): boolean {
   return !!def && def.placement?.road === false;
 }
 
+/** Helicopters and agencies cover by air / reputation: straight-line reach. */
+export function isAerial(def: BuildingDef | undefined): boolean {
+  return !!def && (def.id.endsWith('_heli') || hasTag(def, 'helicopter', 'aerial', 'spy'));
+}
+
 /** Catalog index lookup shared by both sides (same module → same order). */
 const DEF_INDEX = new Map<string, number>();
 BUILDINGS.forEach((d, i) => DEF_INDEX.set(d.id, i));
@@ -137,20 +142,12 @@ export function defAt(index: number): BuildingDef | undefined {
 }
 
 // ── jobs & results ──────────────────────────────────────────────────────────
-/** Terrain snapshot; sent only when terrain / water changed. */
+/** Terrain snapshot; sent only when terrain / water (or the flood level) changed. */
 export interface TerrainPacket {
   /** (size+1)^2 vertex heights */
   heights: Float32Array;
   /** size^2 water surface elevation (flood offset already applied) */
   water: Float32Array;
-}
-
-/** Previous persisted values used to seed temporal smoothing after a load. */
-export interface SeedPacket {
-  landValue: Uint8Array;
-  pollution: Uint8Array;
-  crime: Uint8Array;
-  happiness: Uint8Array;
 }
 
 export interface WeatherPacket {
@@ -162,40 +159,51 @@ export interface WeatherPacket {
   precipitation: number;
 }
 
+/** Stride of the transit stop list: x, y, amount (0..255), radius (cells). */
+export const STOP_STRIDE = 4;
+
 export interface FieldJob {
-  /** world session token; results for a stale token are discarded */
+  /** world session token; the worker resets its temporal state when it changes */
   token: number;
   size: number;
-  /** skip temporal smoothing (fresh load / tests) */
+  /** skip temporal smoothing (fresh load, forced full recompute) */
   full: boolean;
+  /** in-game days since the previous job (drives temporal smoothing) */
+  days: number;
+  /** required on the first job of a session and whenever terrain / water changed */
   terrain?: TerrainPacket;
-  seed?: SeedPacket;
   road: Uint8Array;
+  /** bit0 bridge, bit1 tunnel */
+  roadFlags: Uint8Array;
   zone: Uint8Array;
   trees: Uint8Array;
+  /** trees changed since the previous job: rebuild the forest field */
+  treesChanged: boolean;
   /** congestion per road cell (owned by the traffic system) */
   traffic: Uint8Array;
   recI: Int32Array;
   recF: Float32Array;
   count: number;
-  /** transit stops: [x, y, amount, radius] quadruples */
-  stops: Int32Array;
+  /** transit stops, STOP_STRIDE floats each */
+  stops: Float32Array;
+  stopCount: number;
   weather: WeatherPacket;
-  powerUseMult: number;
-  waterUseMult: number;
   /** 0..1 theme rainfall (scales how quickly rain washes the air) */
   rainfall: number;
-  /** output buffers handed back from the previous result for reuse */
+  /** spare size^2 byte buffers the worker may reuse for its outputs */
   recycle?: ArrayBuffer[];
 }
 
 export interface NetworkStats {
+  /** supply (power MW, water m³/day) or processing capacity (sewage m³/day) */
   produced: number;
+  /** total demand of every consumer (served or not) */
   consumed: number;
+  /** consumer buildings actually served */
   connected: number;
 }
 
-/** Fields the engine writes every run (never traffic or static resources). */
+/** Fields the engine may write (never traffic or the static resources fertility/ore/oil/wind). */
 export const OUTPUT_FIELDS: FieldId[] = [
   'power', 'water', 'sewage',
   'police', 'fire', 'health', 'education', 'garbage', 'deathcare',
@@ -205,6 +213,7 @@ export const OUTPUT_FIELDS: FieldId[] = [
 
 export interface FieldResult {
   token: number;
+  /** freshly computed fields (forest only when trees changed or on full runs) */
   fields: Partial<Record<FieldId, Uint8Array>>;
   power: NetworkStats;
   water: NetworkStats;
@@ -212,4 +221,6 @@ export interface FieldResult {
   /** worker compute time (ms) and a per-stage breakdown */
   ms: number;
   stages: Record<string, number>;
+  /** input buffers handed back to the main thread for reuse */
+  recycle: ArrayBuffer[];
 }

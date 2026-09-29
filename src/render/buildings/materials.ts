@@ -21,6 +21,8 @@ const U = {
   uTime: { value: 0 },
   uHour: { value: 12 },
   uAnimTime: { value: 0 },
+  uWet: { value: 0 },
+  uSnow: { value: 0 },
   uSkyZenith: { value: new THREE.Color(0.22, 0.42, 0.78) },
   uSkyHorizon: { value: new THREE.Color(0.72, 0.8, 0.9) },
   uSkyGround: { value: new THREE.Color(0.28, 0.27, 0.25) },
@@ -130,6 +132,8 @@ const FRAG_PARS = /* glsl */ `
 uniform float uNight;
 uniform float uTime;
 uniform float uHour;
+uniform float uWet;
+uniform float uSnow;
 uniform vec3 uSkyZenith;
 uniform vec3 uSkyHorizon;
 uniform vec3 uSkyGround;
@@ -168,13 +172,13 @@ float bFill(float sd, float aa) { return 1.0 - smoothstep(-aa, aa, sd); }
 vec3 bHue(float h) { return 0.5 + 0.5 * cos(6.28318 * (h + vec3(0.0, 0.33, 0.67))); }
 
 const float B_SCHED[192] = float[192](
-  0.30,0.20,0.14,0.10,0.10,0.14,0.30,0.40,0.40,0.40,0.40,0.40,0.40,0.40,0.40,0.40,0.45,0.50,0.55,0.60,0.60,0.55,0.48,0.38,
-  0.34,0.20,0.10,0.06,0.05,0.10,0.30,0.42,0.25,0.12,0.10,0.10,0.12,0.12,0.12,0.14,0.22,0.38,0.56,0.68,0.72,0.68,0.58,0.46,
-  0.14,0.10,0.08,0.08,0.08,0.10,0.20,0.45,0.75,0.90,0.92,0.92,0.92,0.92,0.92,0.92,0.92,0.92,0.90,0.88,0.80,0.60,0.35,0.20,
-  0.12,0.10,0.08,0.08,0.08,0.12,0.25,0.55,0.85,0.90,0.90,0.90,0.90,0.90,0.90,0.90,0.88,0.80,0.62,0.45,0.32,0.24,0.18,0.14,
+  0.30,0.20,0.14,0.10,0.10,0.14,0.30,0.40,0.40,0.40,0.40,0.40,0.40,0.40,0.40,0.40,0.42,0.46,0.50,0.52,0.52,0.48,0.42,0.34,
+  0.22,0.14,0.08,0.05,0.05,0.08,0.24,0.34,0.20,0.10,0.08,0.08,0.10,0.10,0.10,0.12,0.18,0.30,0.42,0.50,0.54,0.52,0.45,0.34,
+  0.10,0.08,0.06,0.06,0.06,0.08,0.18,0.40,0.70,0.85,0.88,0.88,0.88,0.88,0.88,0.88,0.88,0.88,0.85,0.80,0.70,0.50,0.30,0.16,
+  0.10,0.08,0.07,0.07,0.07,0.10,0.22,0.50,0.80,0.85,0.85,0.85,0.85,0.85,0.85,0.85,0.85,0.78,0.60,0.42,0.30,0.22,0.16,0.12,
   0.45,0.42,0.40,0.40,0.42,0.50,0.62,0.70,0.72,0.72,0.72,0.72,0.72,0.72,0.72,0.72,0.72,0.70,0.62,0.55,0.50,0.48,0.46,0.45,
   0.55,0.50,0.50,0.50,0.50,0.55,0.65,0.80,0.85,0.85,0.85,0.85,0.85,0.85,0.85,0.85,0.85,0.80,0.75,0.70,0.65,0.62,0.60,0.58,
-  0.40,0.28,0.18,0.14,0.12,0.16,0.30,0.40,0.30,0.20,0.18,0.18,0.18,0.18,0.20,0.24,0.30,0.40,0.50,0.60,0.66,0.66,0.60,0.50,
+  0.36,0.25,0.16,0.12,0.10,0.14,0.28,0.38,0.28,0.18,0.16,0.16,0.16,0.16,0.18,0.22,0.28,0.36,0.46,0.54,0.58,0.58,0.52,0.44,
   0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
 );
 float bSched(int s, float h) {
@@ -183,12 +187,30 @@ float bSched(int s, float h) {
   int i1 = (i0 + 1) % 24;
   return mix(B_SCHED[s * 24 + i0], B_SCHED[s * 24 + i1], fract(hh));
 }
+// Lit-window occupancy of one storey: the use's hourly schedule × lit level ×
+// a per-building temperament (some towers burn bright, some sleep); offices
+// and shops light or darken whole floors (late teams, cleaning crews).
+float bOcc(int s, uint seed, float lvl, float fl) {
+  float o = bSched(s, uHour) * lvl * (0.55 + 0.8 * bHashF(seed, 91u, 7u));
+  if (s == 3 || s == 2) o *= mix(0.3, 1.4, step(0.38, bHashF(seed, bU(fl), 13u)));
+  return o;
+}
 vec3 bLightCol(float r, int s) {
   vec3 warm = vec3(1.0, 0.56, 0.24), soft = vec3(1.0, 0.7, 0.4), neut = vec3(1.0, 0.85, 0.64), cool = vec3(0.78, 0.88, 1.0);
   if (s == 3 || s == 5) return r < 0.55 ? cool : r < 0.85 ? neut : soft;
   if (s == 2) return r < 0.4 ? neut : r < 0.75 ? cool : soft;
   if (s == 4) return r < 0.55 ? vec3(1.0, 0.6, 0.26) : cool;
   return r < 0.45 ? warm : r < 0.8 ? soft : r < 0.93 ? neut : cool;
+}
+// Flames behind a window: w = window-local coords (0..1, y up). Deep red at
+// the base, orange tongues flickering upward, smoke-darkened head.
+vec3 bFlame(vec2 w, float r) {
+  float t = uTime;
+  float n = bVN(vec2(w.x * 3.0 + r * 37.0, w.y * 2.2 - t * 3.1)) * 0.6 + bVN(vec2(w.x * 7.0 - r * 11.0, w.y * 4.5 - t * 5.3)) * 0.4;
+  float tongue = smoothstep(0.1, 0.9, 1.0 - w.y + (n - 0.5) * 0.9);
+  float flick = 0.75 + 0.25 * bVN(vec2(t * 9.0, r * 50.0));
+  vec3 hot = mix(vec3(0.7, 0.07, 0.01), vec3(1.0, 0.4, 0.05), tongue);
+  return hot * (0.2 + 1.5 * tongue * tongue) * flick;
 }
 float bLitInten(int s) { return s == 3 ? 2.1 : s == 2 ? 2.4 : s == 4 ? 1.8 : 1.7; }
 vec3 bSky(vec3 d) {
@@ -296,7 +318,7 @@ void bWindows(inout BOut o, vec2 uv, float bay, float fh, float ww, float wh, fl
   float rB = bHashF(seed, 77u, 3u);
 
   float nightOn = smoothstep(0.05, 0.65, uNight);
-  float occ = bSched(sched, uHour) * litLvl;
+  float occ = bOcc(sched, seed, litLvl, ci.y);
   float lit = step(rLit, occ * nightOn);
   vec3 lcol = bLightCol(rCol, sched);
   float inten = bLitInten(sched);
@@ -317,7 +339,7 @@ void bWindows(inout BOut o, vec2 uv, float bay, float fh, float ww, float wh, fl
   if (det < 0.999) {
     float litAvg = mix(lit, occ * nightOn * (broken || burned || building ? 0.0 : 1.0), smoothstep(3.0, 1.2, pxBay));
     vec3 e = lcol * inten * litAvg * area * 0.55 + vec3(0.08, 0.07, 0.06) * dayL * area * 0.3;
-    if (fire && rInt < 0.8) e += vec3(1.0, 0.36, 0.08) * 2.5 * area;
+    if (fire && rInt < 0.8) e += vec3(0.95, 0.3, 0.04) * 1.1 * area * (0.7 + 0.3 * bVN(vec2(uTime * 6.0, rLit * 40.0)));
     float k = (1.0 - det) * min(1.0, area * 1.6);
     o.alb = mix(o.alb, mix(o.alb, glassTint * 1.6, 0.8), k);
     o.rough = mix(o.rough, 0.25, k);
@@ -401,7 +423,7 @@ void bWindows(inout BOut o, vec2 uv, float bay, float fh, float ww, float wh, fl
   }
   if (fire && rInt < 0.85) {
     float fl = 0.6 + 0.4 * bVN(vec2(uTime * 9.0 + rLit * 40.0, wl.y * 3.0 - uTime * 4.0));
-    ie = vec3(1.0, 0.33, 0.07) * (2.2 + 2.8 * fl) * (0.6 + 0.4 * (1.0 - wl.y));
+    ie = bFlame(wl, rLit) * (0.8 + 0.2 * fl);
   }
 
   vec3 glassAlb = glassTint;
@@ -413,6 +435,7 @@ void bWindows(inout BOut o, vec2 uv, float bay, float fh, float ww, float wh, fl
       glassAlb = vec3(0.4, 0.31, 0.2) * (0.6 + 0.4 * plank); gRough = 0.9; gF0 = 0.0; ie = vec3(0.0);
     } else { glassAlb = glassTint * 1.6; gRough = 0.5; gF0 = 0.04; ie *= 0.3; }
   }
+  if (fire && !burned) { glassAlb *= 0.45; gF0 = 0.03; }
   if (burned) { glassAlb = vec3(0.012); gRough = 0.95; gF0 = 0.0; if (!fire) ie = vec3(0.0); frameCol = vec3(0.03); }
   if (building) { glassAlb = vec3(0.05); gRough = 0.95; gF0 = 0.0; ie = vec3(0.01) * dayL; }
 
@@ -674,7 +697,7 @@ bO.f0 = 0.04;
     float rCol = bHashF(bU(bUv.x / 3.2) + 7u, bU(fl), key);
     float rInt = bHashF(bU(bUv.x / 3.2), bU(fl) + 3u, key);
     int sched = bSchedId == 0 ? 3 : bSchedId;
-    float occ = bSched(sched, uHour) * bLitLvl;
+    float occ = bOcc(sched, bSeed, bLitLvl, fl);
     float lit = step(rLit, occ * bNightOn) * bLitOn;
     vec3 lcol = bLightCol(rCol, sched);
     float inten = bLitInten(sched) * 0.85;
@@ -690,7 +713,7 @@ bO.f0 = 0.04;
       float m = step(bl, (py - 0.0) / (fh - spH));
       ie = mix(ie, vec3(0.7) * (dayL * 0.25 + lit * lcol * inten * 0.5) * (0.8 + 0.2 * step(0.4, fract(py / 0.05))), m * det);
     }
-    if ((bCond & 8u) != 0u && rInt < 0.8) ie = vec3(1.0, 0.35, 0.08) * (3.0 + 2.0 * bVN(vec2(uTime * 8.0 + rLit * 30.0, py)));
+    if ((bCond & 8u) != 0u && rInt < 0.8) ie = bFlame(vec2(fract(bUv.x / 3.2), py / fh), rLit);
     bool broken = (bCond & 3u) != 0u;
     vec3 gAlb = tint * 0.55 + 0.03;
     float gRough = 0.035 + 0.05 * bN2(vec2(pi, fl));
@@ -753,7 +776,7 @@ bO.f0 = 0.04;
     vec3 ie = vec3(0.0);
     if (det > 0.001) ie = bInterior(lp - vec2(0.0, 0.0), bay, 3.4, bRdT, rD, lit, lcol, 2.6, dayL, 2);
     ie = mix(lcol * 2.2 * lit * 0.5 + vec3(0.05) * dayL, ie, det);
-    if ((bCond & 8u) != 0u) ie = vec3(1.0, 0.35, 0.08) * (3.0 + 2.0 * bVN(vec2(uTime * 8.0 + rL * 30.0, lp.y)));
+    if ((bCond & 8u) != 0u) ie = bFlame(vec2(lp.x / bay, lp.y / 3.4), rL) * 1.2;
     float fres = 0.05 + 0.95 * pow(1.0 - bNdV, 5.0);
     vec3 gAlb = vec3(0.08, 0.1, 0.1);
     bool broken = (bCond & 3u) != 0u;
@@ -823,7 +846,7 @@ bO.f0 = 0.04;
     bO.metal = mix(bO.metal, 0.0, mWin * det);
     float lw = mix(mWin - mWinF, 0.12, 1.0 - det);
     bO.emit += lcol * 1.8 * lit * lw + lcol * 0.02 * bNightOn * lw * bLitOn;
-    if ((bCond & 8u) != 0u) bO.emit += vec3(1.0, 0.35, 0.08) * 3.0 * lw * (0.6 + 0.4 * bVN(vec2(uTime * 7.0, rb * 10.0)));
+    if ((bCond & 8u) != 0u) bO.emit += vec3(0.95, 0.3, 0.04) * 1.4 * lw * (0.6 + 0.4 * bVN(vec2(uTime * 7.0, rb * 10.0)));
     bO.h += (-0.05 * mDoor + slat * 0.004 * mDoor - 0.03 * mWin) * det;
   }
 #endif
@@ -911,19 +934,51 @@ bO.f0 = 0.04;
 #if BTYPE == 20
 bO.alb *= 0.97 + 0.06 * bVN(bUv * 2.0);
 #endif
-#if BTYPE == 21
+#if BTYPE == 21 || BTYPE == 22
 {
-  bO.alb = bO.alb * 0.4 + 0.02;
-  bO.refl = 1.0;
-  bO.f0 = 0.12;
-  float nightOn = bNightOn;
-  bO.emit += bO.alb * 0.0 * nightOn;
-}
+  bool bRail = false;
+#ifdef B_FAC
+  bRail = uint(vBFac.x * 255.0 + 0.5) == 20u;
 #endif
-#if BTYPE == 22
-bO.alb *= 0.9 + 0.1 * bVN(vec2(bUv.x * 0.5, bUv.y * 24.0));
-bO.refl = 0.35;
-bO.f0 = 0.5;
+  float aaR = bMpp * 0.75 + 1e-4;
+  // railing panels: UV u = metres along the rail, v = 0 (base) .. 1 (handrail)
+  float hand = bFill(abs(bUv.y - 0.955) - 0.045, aaR);
+#if BTYPE == 21
+  if (bRail) {
+    // glass balustrade: pale frosted pane, steel handrail and base shoe
+    float shoe = bFill(bUv.y - 0.05, aaR);
+    float post = bFill(abs(fract(bUv.x / 1.6 + 0.5) - 0.5) * 1.6 - 0.02, aaR);
+    float mS = max(max(hand, shoe), post);
+    bO.alb = mix(bO.alb * 0.62 + 0.04, vec3(0.55, 0.57, 0.6), mS);
+    bO.refl = 0.85 * (1.0 - mS);
+    bO.f0 = 0.08;
+    bO.rough = mix(0.08, 0.35, mS);
+    bO.metal = mix(0.2, 0.9, mS);
+  } else {
+    bO.alb = bO.alb * 0.4 + 0.02;
+    bO.refl = 1.0;
+    bO.f0 = 0.12;
+  }
+#else
+  if (bRail) {
+    // wrought-iron railing: balusters + rails over the shadowed balcony behind
+    float det = 1.0 - smoothstep(0.01, 0.035, bMpp);
+    float bar = bFill(abs(fract(bUv.x / 0.12) - 0.5) * 0.12 - 0.011, aaR);
+    float low = bFill(abs(bUv.y - 0.07) - 0.025, aaR);
+    float m = max(mix(0.3, bar, det), max(hand, low));
+    bO.alb = mix(bO.alb, vec3(0.04, 0.042, 0.046), m);
+    bO.metal = 0.7 * m;
+    bO.rough = mix(0.92, 0.4, m);
+    bO.refl = 0.2 * m;
+    bO.f0 = 0.3;
+    bO.h += 0.012 * m * det;
+  } else {
+    bO.alb *= 0.9 + 0.1 * bVN(vec2(bUv.x * 0.5, bUv.y * 24.0));
+    bO.refl = 0.35;
+    bO.f0 = 0.5;
+  }
+#endif
+}
 #endif
 #if BTYPE == 23
 {
@@ -1106,7 +1161,7 @@ bO.alb *= 0.75 + 0.4 * bVN(vec2(atan(bN.z, bN.x) * 4.0, vBWPos.y * 6.0));
       uint key = bSeed * 16u + bFace;
       float rl = bHashF(bU(ci.x), bU(ci.y), key);
       float rc = bHashF(bU(ci.x) + 9u, bU(ci.y), key);
-      float occ = bSched(sched, uHour) * bLitLvl;
+      float occ = bOcc(sched, bSeed, bLitLvl, ci.y);
       float lit = step(rl, occ * bNightOn);
       lit = mix(lit, occ * bNightOn, smoothstep(2.5, 0.8, px));
       lit *= bLitOn;
@@ -1125,7 +1180,7 @@ bO.alb *= 0.75 + 0.4 * bVN(vec2(atan(bN.z, bN.x) * 4.0, vBWPos.y * 6.0));
       bO.f0 = ft == 3u ? 0.25 : 0.08;
       float inten = shopRow ? 2.4 : bLitInten(sched);
       bO.emit += lcol * inten * lit * m * 0.85 + vec3(0.05, 0.045, 0.04) * m * (1.0 - uNight);
-      if ((bCond & 8u) != 0u) bO.emit += vec3(1.0, 0.35, 0.08) * 2.5 * m;
+      if ((bCond & 8u) != 0u) bO.emit += vec3(0.95, 0.3, 0.04) * 1.2 * m * (0.7 + 0.3 * bVN(vec2(uTime * 6.0, rl * 40.0)));
     }
     if ((bCond & 3u) != 0u) bO.alb *= 0.55;
   }
@@ -1183,6 +1238,23 @@ if ((bCond & 8u) != 0u) {
   float fl = 0.55 + 0.45 * bVN(vec2(uTime * 6.0 + vBWPos.x * 0.2, vBWPos.y * 0.4 - uTime * 2.0));
   bO.emit += vec3(1.0, 0.36, 0.08) * 0.22 * fl * max(0.2, 1.0 - abs(bN.y));
 }
+// ── weather: snow settles on up-facing surfaces, rain darkens and glosses ──
+#if BTYPE != 6 && BTYPE != 21 && BTYPE != 30 && BTYPE != 34 && BTYPE != 35
+if (uSnow > 0.002 || uWet > 0.002) {
+  float bUp = bN.y;
+  float bSn = uSnow * smoothstep(0.3, 0.75, bUp);
+  bSn *= smoothstep(0.2, 0.55, bFbm(vBWPos.xz * 0.3 + vBWPos.y * 0.1) * 0.55 + uSnow * 0.75);
+  bO.alb = mix(bO.alb, vec3(0.88, 0.9, 0.94), bSn);
+  bO.rough = mix(bO.rough, 0.8, bSn);
+  bO.metal = mix(bO.metal, 0.0, bSn);
+  bO.emit *= 1.0 - bSn * 0.9;
+  bO.h += bSn * 0.02;
+  float bWt = uWet * (1.0 - bSn) * (0.5 + 0.5 * smoothstep(-0.2, 0.8, bUp));
+  bO.alb *= 1.0 - 0.32 * bWt;
+  bO.rough = mix(bO.rough, 0.18, bWt * 0.8);
+  bO.refl = max(bO.refl, bWt * 0.4 * smoothstep(0.5, 0.9, bUp));
+}
+#endif
 diffuseColor.rgb = bO.alb;
 `;
 
@@ -1351,7 +1423,6 @@ const animCache = new Map<MatKey, THREE.Material>();
 let lodMat: THREE.MeshStandardMaterial | null = null;
 let depthAnim: THREE.Material | null = null;
 let distAnim: THREE.Material | null = null;
-const ghosts: THREE.ShaderMaterial[] = [];
 
 /** Get the shared material for a key (vertex colors enabled). */
 export function getMaterial(key: MatKey): THREE.Material {
@@ -1427,9 +1498,15 @@ export function updateMaterials(night: number, timeSec: number, hour?: number, a
   U.uHour.value = h;
   U.uAnimTime.value = (animTime ?? timeSec) % 36000;
   skyColors(night, h);
-  const pulse = 0.5 + 0.5 * Math.sin(timeSec * 4);
-  for (const g of ghosts) g.uniforms.uPulse.value = pulse;
-  for (const g of ghosts) g.uniforms.uTime.value = timeSec % 1000;
+  G.uPulse.value = 0.5 + 0.5 * Math.sin(timeSec * 4);
+  G.uGTime.value = timeSec % 1000;
+}
+
+/** Weather state for every building material: surface wetness (rain) and
+ *  snow cover, both 0..1 (BuildingRenderer mirrors the renderer's shared uniforms). */
+export function setMaterialWeather(wet: number, snow: number): void {
+  U.uWet.value = wet;
+  U.uSnow.value = snow;
 }
 
 /** Current values of the shared building uniforms (read-only use). */
@@ -1438,53 +1515,55 @@ export function materialUniforms(): { night: number; hour: number; time: number 
 }
 
 // ── ghost (placement preview) ───────────────────────────────────────────────
-const GHOST_VERT = /* glsl */ `
-varying vec3 vN;
-varying vec3 vW;
-#include <common>
-#include <logdepthbuf_pars_vertex>
-void main() {
-  vN = normalize(mat3(modelMatrix) * normal);
-  vec4 w = modelMatrix * vec4(position, 1.0);
-  vW = w.xyz;
-  gl_Position = projectionMatrix * viewMatrix * w;
-  #include <logdepthbuf_vertex>
-}
-`;
-const GHOST_FRAG = /* glsl */ `
-uniform vec3 uColor;
-uniform float uPulse;
-uniform float uTime;
-uniform float uOpacity;
-varying vec3 vN;
-varying vec3 vW;
-#include <common>
-#include <logdepthbuf_pars_fragment>
-void main() {
-  #include <logdepthbuf_fragment>
-  vec3 n = normalize(vN);
-  vec3 v = normalize(cameraPosition - vW);
-  float lamb = 0.55 + 0.45 * max(dot(n, normalize(vec3(0.4, 0.8, 0.3))), 0.0);
-  float rim = pow(1.0 - clamp(dot(n, v), 0.0, 1.0), 2.5);
-  float scan = smoothstep(0.85, 1.0, fract(vW.y * 0.25 - uTime * 0.6)) * 0.35;
-  vec3 c = uColor * lamb + uColor * rim * 1.2 + vec3(scan) * uColor;
-  gl_FragColor = vec4(c, uOpacity * (0.75 + 0.25 * uPulse) + rim * 0.25);
-}
-`;
+// A MeshStandardMaterial whose output is replaced by a pulsing holographic
+// tint: the tint is the material's `emissive` colour, so placement tools that
+// recolour previews through `emissive` (valid ↔ invalid) keep working, and
+// clones (tools tint per-preview copies) keep the effect via the constructor.
+const G = { uPulse: { value: 0.5 }, uGTime: { value: 0 } };
 
-function makeGhost(valid: boolean): THREE.ShaderMaterial {
-  const m = new THREE.ShaderMaterial({
-    uniforms: {
-      uColor: { value: new THREE.Color(valid ? 0x5cc8ff : 0xff4a4a) },
-      uPulse: { value: 0.5 },
-      uTime: { value: 0 },
-      uOpacity: { value: 0.42 },
-    },
-    vertexShader: GHOST_VERT,
-    fragmentShader: GHOST_FRAG,
+class GhostMaterial extends THREE.MeshStandardMaterial {
+  constructor(params?: THREE.MeshStandardMaterialParameters) {
+    super(params);
+    this.onBeforeCompile = (shader) => {
+      shader.uniforms.uPulse = G.uPulse;
+      shader.uniforms.uGTime = G.uGTime;
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying float vGY;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGY = (modelMatrix * vec4(transformed, 1.0)).y;');
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform float uPulse;\nuniform float uGTime;\nvarying float vGY;')
+        .replace(
+          '#include <opaque_fragment>',
+          `#include <opaque_fragment>
+{
+  vec3 gTint = emissive;
+  vec3 gN = normalize(vNormal);
+  vec3 gV = normalize(vViewPosition);
+  float gRim = pow(1.0 - clamp(abs(dot(gN, gV)), 0.0, 1.0), 2.5);
+  vec3 gL = normalize((viewMatrix * vec4(0.4, 0.8, 0.3, 0.0)).xyz);
+  float gLamb = 0.55 + 0.45 * max(dot(gN, gL), 0.0);
+  float gScan = smoothstep(0.85, 1.0, fract(vGY * 0.25 - uGTime * 0.6)) * 0.35;
+  gl_FragColor = vec4(gTint * gLamb + gTint * gRim * 1.2 + gScan * gTint, opacity * (0.75 + 0.25 * uPulse) + gRim * 0.25);
+}`,
+        );
+    };
+    this.customProgramCacheKey = () => 'bld-ghost';
+  }
+}
+
+const ghosts: THREE.MeshStandardMaterial[] = [];
+
+function makeGhost(valid: boolean): THREE.MeshStandardMaterial {
+  const m = new GhostMaterial({
+    color: 0x000000,
+    emissive: valid ? 0x5cc8ff : 0xff4a4a,
+    emissiveIntensity: 1,
     transparent: true,
+    opacity: 0.42,
     depthWrite: false,
     depthFunc: THREE.LessEqualDepth,
+    roughness: 1,
+    metalness: 0,
   });
   m.name = valid ? 'bld:ghost-valid' : 'bld:ghost-invalid';
   return m;

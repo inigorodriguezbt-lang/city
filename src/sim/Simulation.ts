@@ -15,7 +15,7 @@ import { BFlag, Layer, RoadType, type Building, type BudgetCategory, type TaxCat
 import { DAYS_PER_MONTH, DAYS_PER_YEAR, START_YEAR, TICKS_PER_DAY } from '../core/constants';
 import { calendar } from '../core/time';
 import { policyDef } from '../data/policies';
-import { achievementDef, ACHIEVEMENTS } from '../data/achievements';
+import { achievementDef, ACHIEVEMENTS, type AchievementInfo, type AchievementSnapshot } from '../data/achievements';
 import { DayAgg } from './aggregates';
 import { SimContext, neutralMods } from './context';
 import { loadSimState, type CityRates } from './state';
@@ -62,6 +62,15 @@ const FF_TARGET_MS = 2500;
 const FF_HARD_MS = 9000;
 /** coarse step sizes (divisors of a month so steps never straddle a month) */
 const COARSE_STEPS = [2, 3, 5, 6, 10, 15, 30];
+
+/** 0..1 progress of a locked achievement against a snapshot */
+function progressOf(a: AchievementInfo, snap: AchievementSnapshot): number {
+  try {
+    return a.progress ? Math.max(0, Math.min(1, a.progress(snap))) : a.check(snap) ? 1 : 0;
+  } catch {
+    return 0;
+  }
+}
 
 export class Simulation {
   protected world: World | null = null;
@@ -124,11 +133,11 @@ export class Simulation {
     const ev = this.game.events;
     this.offs.push(
       ev.on('world:changed', ({ rect, layers }) => {
-        // building layer changes are mostly visual (touchBuilding); additions and removals are handled below,
-        // so cells that cannot host a lot are not re-added every time a neighbour levels up
-        if (layers & (Layer.Zone | Layer.Road | Layer.Terrain | Layer.Water)) {
-          ctx.candidates.markRect(rect, 1, (layers & (Layer.Road | Layer.Terrain | Layer.Water)) !== 0);
-        }
+        // zone / road edits: only the cells that really changed are re-evaluated (building
+        // additions also flag the zone layer; their footprint is handled by building:added)
+        if (layers & (Layer.Zone | Layer.Road)) ctx.candidates.syncRect(rect);
+        // terraforming and floods change slopes / wet cells: budgeted chunk rescan
+        if (layers & (Layer.Terrain | Layer.Water)) ctx.candidates.markRect(rect, 1, true);
         if (layers & Layer.Road) {
           ctx.roadsDirty = true;
           ctx.outside.dirty = true;
@@ -143,7 +152,7 @@ export class Simulation {
       }),
       ev.on('building:removed', (b) => {
         ctx.idsDirty = true;
-        ctx.candidates.markRect({ x0: b.x, y0: b.y, x1: b.x + b.w - 1, y1: b.y + b.h - 1 }, 1, true);
+        ctx.candidates.retryAround({ x0: b.x, y0: b.y, x1: b.x + b.w - 1, y1: b.y + b.h - 1 });
       }),
       ev.on('unlocks:changed', () => {
         ctx.refreshServiceFields();
@@ -369,10 +378,8 @@ export class Simulation {
     const q = ctx.removeQueue;
     ctx.removeQueue = [];
     for (const id of q) {
-      const b = w.getBuilding(id);
-      if (!b) continue;
-      w.removeBuilding(id);
-      ctx.candidates.markRect({ x0: b.x, y0: b.y, x1: b.x + b.w - 1, y1: b.y + b.h - 1 }, 1, true);
+      // building:removed re-opens the freed cells for growth
+      if (w.getBuilding(id)) w.removeBuilding(id);
     }
     ctx.idsDirty = true;
   }
@@ -418,12 +425,12 @@ export class Simulation {
   private endDay(dtDays: number): void {
     const ctx = this.ctx!, w = this.world!, st = ctx.state, m = st.metrics;
     const a = ctx.agg;
-    settleStorage(ctx);
+    settleStorage(ctx, dtDays);
     if (!a.partial) {
       this.flows = computeRates(ctx, a);
       ctx.last = a;
       ctx.lastValid = true;
-      writeStats(ctx, a);
+      writeStats(ctx, a, dtDays);
       ctx.perks = a.perks.resolve();
       rollCounts(ctx, a, dtDays);
       this.why = updateDemand(ctx, a, dtDays);
@@ -442,6 +449,7 @@ export class Simulation {
     checkMilestones(ctx);
     ctx.refreshGrace();
     ctx.refreshServiceFields();
+    ctx.candidates.expireUnfit();
     this.growth!.daily();
     this.chirper!.daily();
     this.advisor!.daily();
@@ -512,21 +520,20 @@ export class Simulation {
     if (w.achievements.includes(id)) return 1;
     const a = achievementDef(id);
     if (!a || !ctx.lastValid) return 0;
-    const snap = achievementSnapshot(ctx);
-    try {
-      return a.progress ? Math.max(0, Math.min(1, a.progress(snap))) : a.check(snap) ? 1 : 0;
-    } catch {
-      return 0;
-    }
+    return progressOf(a, achievementSnapshot(ctx));
   }
 
   /** all achievements with unlocked flag and progress */
   achievementList(): { id: string; name: string; description: string; icon: string; hidden: boolean; unlocked: boolean; progress: number }[] {
-    const w = this.world;
-    return ACHIEVEMENTS.map((a) => ({
-      id: a.id, name: a.name, description: a.description, icon: a.icon, hidden: !!a.hidden,
-      unlocked: !!w?.achievements.includes(a.id), progress: this.achievementProgress(a.id),
-    }));
+    const w = this.world, ctx = this.ctx;
+    const snap = w && ctx?.lastValid ? achievementSnapshot(ctx) : null;
+    return ACHIEVEMENTS.map((a) => {
+      const unlocked = !!w?.achievements.includes(a.id);
+      return {
+        id: a.id, name: a.name, description: a.description, icon: a.icon, hidden: !!a.hidden,
+        unlocked, progress: unlocked ? 1 : snap ? progressOf(a, snap) : 0,
+      };
+    });
   }
 
   // ════════════════════════════════════════════════════════════════════════
@@ -575,6 +582,16 @@ export class Simulation {
     const round = (r: Record<string, number>) => {
       const o: Record<string, number> = {};
       for (const [k, v] of Object.entries(r)) o[k] = Math.round(v);
+      // Ledger keys are namespaced ("taxes:resLow", "upkeep:power") exactly like the
+      // categories recorded by world.earn / world.charge. Consumers that look a line up
+      // by its bare TaxCategory / BudgetCategory id get a non-enumerable alias, so sums
+      // and listings over the record still see every amount exactly once.
+      for (const [k, v] of Object.entries(o)) {
+        const sep = k.indexOf(':');
+        if (sep < 0) continue;
+        const bare = k.slice(sep + 1);
+        if (!(bare in o)) Object.defineProperty(o, bare, { value: v, enumerable: false, configurable: true });
+      }
       return o;
     };
     return { income: round(p.income), expense: round(p.expense) };

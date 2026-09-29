@@ -41,7 +41,7 @@ const game = {
 } as unknown as import('../../src/game/Game').Game;
 
 const ms: MapSettings = {
-  cityName: 'Testville', mapSize: 'small', theme: 'temperate', seed: 1234, style: 'european', difficulty: 'normal',
+  cityName: 'Testville', mapSize: 'small', theme: 'temperate', seed: Number(argv.find((a) => a.startsWith('--seed='))?.slice(7) ?? 1234), style: 'european', difficulty: 'normal',
   creative: false, disasters: false, mountains: 0, water: 0, forests: 0,
 };
 const world = new World(ms, SIZE);
@@ -262,7 +262,7 @@ function mayor(): void {
     }
   }
   // zoning: keep some free land for each category with demand
-  for (let c = 0; c < 4; c++) {
+  for (let c = 0; c < 4 && !argv.includes('--prezone'); c++) {
     const cat = CATS[c];
     if (s.demand[cat] > 0.15 || (pop < 100 && cat !== 'off')) {
       for (let k = 0; k < (s.demand[cat] > 0.5 ? 3 : 1); k++) {
@@ -289,6 +289,14 @@ const sim = new Simulation(game);
 world.flushChanges();
 sim.onWorldLoaded(world);
 recomputeFields();
+if (argv.includes('--prezone')) {
+  // fixed zoning (no feedback from the mayor): 60 % residential, 20 % commercial, 20 % industry
+  for (const b of blocks) {
+    if (b.zone === 'svc') continue;
+    const r = hashFloat(b.bx, b.by, 17);
+    zoneBlock(b, r < 0.6 ? 'res' : r < 0.8 ? 'com' : 'ind');
+  }
+}
 place('wind_turbine');
 place('wind_turbine');
 place('water_pump');
@@ -302,7 +310,26 @@ if (argv.includes('--growth')) {
   const origReach = g.reachesOutside.bind(g), origLot = g.findLot.bind(g), origSpawn = g.spawn.bind(g), origTry = g.trySpawn.bind(g);
   g.trySpawn = (...a: unknown[]) => { gstat.tries++; return origTry(...a); };
   g.reachesOutside = (...a: unknown[]) => { const r = origReach(...a); if (!r) gstat.noReach++; return r; };
-  g.findLot = (...a: unknown[]) => { const r = origLot(...a); if (!r) gstat.noLot++; return r; };
+  g.findLot = (...a: unknown[]) => {
+    const r = origLot(...a);
+    if (!r) {
+      gstat.noLot++;
+      if (argv.includes('--why') && gstat.noLot <= 6) {
+        const [x, y] = a as number[];
+        const rows: string[] = [];
+        for (let yy = y - 3; yy <= y + 3; yy++) {
+          let row = '';
+          for (let xx = x - 3; xx <= x + 3; xx++) {
+            const i = world.idx(xx, yy);
+            row += (xx === x && yy === y ? '[' : ' ') + (world.road[i] ? 'R' : world.bldg[i] ? 'B' : world.zone[i] ? String(world.zone[i]) : '.') + (xx === x && yy === y ? ']' : ' ');
+          }
+          rows.push(row);
+        }
+        console.log(`noLot at ${x},${y} zone ${a[2]} day ${world.time.day.toFixed(2)}\n` + rows.join('\n'));
+      }
+    }
+    return r;
+  };
   g.spawn = (...a: unknown[]) => { gstat.spawned++; return origSpawn(...a); };
   const cs = (sim as unknown as { ctx: { candidates: Record<string, (...a: unknown[]) => unknown> } }).ctx.candidates;
   const origElig = cs.eligible.bind(cs), origRandom = cs.random.bind(cs);
@@ -325,6 +352,10 @@ for (let m = 0; m < YEARS * 12; m++) {
     if (fieldsDue) { fieldsDue = false; recomputeFields(); }
   }
   maxTick = Math.max(maxTick, sim.perf.maxTickMs);
+  if (argv.includes('--cands')) {
+    const c = (sim as unknown as { ctx: { candidates: { count(c: number): number } } }).ctx;
+    console.log(`  cands ${[0, 1, 2, 3].map((k) => c.candidates.count(k)).join('/')} free blocks ${blocks.filter((b) => !b.zoned && b.zone !== 'svc').length} ${JSON.stringify(gstat)}`);
+  }
   if (argv.includes('--debug') && m < 3) {
     let zc = 0, rc = 0;
     for (let i = 0; i < N; i++) { if (world.zone[i]) zc++; if (world.road[i]) rc++; }
@@ -378,6 +409,15 @@ console.log('demand why', JSON.stringify(sim.demandFactors()));
     const cs = (sim as unknown as { ctx: { candidates: { has(i: number): boolean } } }).ctx.candidates;
     for (let i = 0; i < N; i++) if (cs.has(i)) byZone[world.zone[i]] = (byZone[world.zone[i]] ?? 0) + 1;
     console.log('candidate zones', JSON.stringify(byZone));
+    // consistency of the incremental candidate set against a brute-force scan
+    const cc = cs as unknown as { has(i: number): boolean; eligible(x: number, y: number, i: number): number };
+    let missing = 0, stale = 0;
+    for (let i = 0; i < N; i++) {
+      const e = cc.eligible(i % SIZE, (i / SIZE) | 0, i);
+      if (e >= 0 && !cc.has(i)) missing++;
+      if (e < 0 && cc.has(i)) stale++;
+    }
+    console.log('candidate set consistency: missing', missing, 'stale', stale);
   }
   console.log('land value avg', (lvSum / Math.max(1, lvN)).toFixed(0), 'max', lvMax);
 }

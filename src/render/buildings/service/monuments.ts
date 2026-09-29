@@ -505,10 +505,16 @@ const M: Record<string, (k: Kit) => number> = {
     for (let i = 0; i < n; i++) {
       const s = sOf(i), y = i * th, c = s * 0.3;
       const pts = chamfer(s, c);
-      const glassTier = i % 3 === 2;
-      k.prismWalls(glassTier ? 'wall_glass' : 'wall_office', pts, y, y + th - 0.8, glassTier ? 0xbcd8e4 : jitter(0xd6d8d4, () => r.next(), 0.04));
+      const glassTier = i % 2 === 1;
+      k.prismWalls(glassTier ? 'wall_glass' : 'wall_office', pts, y, y + th - 0.8, glassTier ? 0xa8d0c8 : jitter(0xd6d8d4, () => r.next(), 0.04));
       k.prismWalls('plain', chamfer(s + 0.4, c + 0.15), y + th - 0.8, y + th, 0xf2f2ee);
-      k.poly('grass', chamfer(s + 0.4, c + 0.15), y + th, lawn);
+      // lush planter bed over the whole ledge (the next tier stands on it)
+      k.prism('foliage', chamfer(s + 0.3, c + 0.1), y + th, y + th + 1.0, r.pick(greens), 'grass', lawn);
+      // vines cascading down the facades
+      if (i > 0 && !k.lo) for (let f = 0; f < 4; f++) for (let v = 0; v < 2; v++) {
+        const along = r.range(-(s - c) * 0.8, (s - c) * 0.8), vw = r.range(2.5, 6), vh = r.range(th * 0.35, th * 0.8);
+        k.at(0, 0, 0, (f * Math.PI) / 2, () => k.box('foliage', along, y + th - 0.8 - vh, s + 0.35, vw, vh, 0.5, shade(r.pick(greens), 0.9), { top: false }));
+      }
       // vertical gardens on the chamfered corners
       for (let q = 0; q < 4; q++) {
         const a = Math.PI / 4 + (q * Math.PI) / 2;
@@ -700,12 +706,12 @@ const M: Record<string, (k: Kit) => number> = {
     k.cyl('metal', 0, 67.6, 0, 4.2, 3.4, 3, 0x6a7078, 12);
     // the tether with LED strips, beacons and climbers
     const t0 = 70.6, t1 = 820;
-    k.cyl('metal', 0, t0, 0, 1.4, 0.45, t1 - t0, 0x30343a, 8, true);
+    k.cyl('metal', 0, t0, 0, 2.3, 0.8, t1 - t0, 0x30343a, 8, true);
     for (let i = 0; i < 3; i++) {
       const a = (i / 3) * Math.PI * 2;
-      k.beam('neon', [Math.cos(a) * 1.45, t0, Math.sin(a) * 1.45], [Math.cos(a) * 0.5, t1, Math.sin(a) * 0.5], 0.18, 0.1, blue);
+      k.beam('neon', [Math.cos(a) * 2.35, t0, Math.sin(a) * 2.35], [Math.cos(a) * 0.85, t1, Math.sin(a) * 0.85], 0.3, 0.12, blue);
     }
-    for (let y = 100, i = 0; y <= t1; y += 40, i++) k.light(1.6, y, 0, i % 2 ? C.beaconRed : 0xffffff, 3 + y / 180, 'beacon', true);
+    for (let y = 100, i = 0; y <= t1; y += 40, i++) k.light(2.5 - (y / t1) * 1.4, y, 0, i % 2 ? C.beaconRed : 0xffffff, 3.5 + y / 160, 'beacon', true);
     k.light(0, t1 + 1, 0, 0xffffff, 8, 'beacon', true);
     for (const y of [190, 430, 680]) {
       k.rev('metal', 0, y, 0, [[1.6, 0], [4.2, 1.5], [4.4, 7], [3.6, 9], [1.6, 10]], 0xe8eaec, 14, { crease: 50 });

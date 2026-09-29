@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>URBIS — field system sandbox</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; background: #11141a; color: #d8dde6; font: 12px/1.35 Inter, system-ui, sans-serif; }
+    header { padding: 10px 14px; display: flex; gap: 18px; align-items: center; flex-wrap: wrap; border-bottom: 1px solid #252a33; }
+    header h1 { font: 600 15px Outfit, Inter, sans-serif; margin: 0; letter-spacing: 0.02em; }
+    header button { background: #232a36; color: #d8dde6; border: 1px solid #364052; border-radius: 6px; padding: 4px 9px; cursor: pointer; font: inherit; }
+    header button:hover { background: #2c3544; }
+    #stats { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; color: #9fb0c6; white-space: pre; }
+    #grid { display: grid; grid-template-columns: repeat(auto-fill, 262px); gap: 10px; padding: 12px 14px; }
+    .panel { background: #181c24; border: 1px solid #252a33; border-radius: 8px; padding: 6px 6px 5px; }
+    .panel canvas { display: block; width: 250px; height: 250px; image-rendering: pixelated; border-radius: 4px; }
+    .panel .t { display: flex; justify-content: space-between; margin-bottom: 4px; }
+    .panel .t b { font-weight: 600; }
+    .panel .t span { color: #8391a5; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Field system sandbox</h1>
+    <button id="wind">Rotate wind</button>
+    <button id="night">Toggle night</button>
+    <button id="plant">Build coal plant (west)</button>
+    <button id="days">Run 5 days</button>
+    <div id="stats">computing…</div>
+  </header>
+  <div id="grid"></div>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>
