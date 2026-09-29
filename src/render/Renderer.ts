@@ -288,6 +288,16 @@ export class GameRenderer {
       time: this.time,
     });
 
+    // water reflects the sky at full strength (scene.environmentIntensity only dims diffuse IBL)
+    const env = this.scene.environment;
+    if (this.water && env && this.water.seaMaterial.envMap !== env) {
+      for (const m of [this.water.seaMaterial, this.water.inlandMaterial]) {
+        m.envMap = env;
+        m.envMapIntensity = 1;
+        m.needsUpdate = true;
+      }
+    }
+
     // view info for other renderers
     this.projView.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
     this.frustum.setFromProjectionMatrix(this.projView, cam.coordinateSystem, (cam as unknown as { reversedDepth?: boolean }).reversedDepth ?? false);

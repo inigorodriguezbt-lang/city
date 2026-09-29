@@ -176,7 +176,7 @@ export class SkySystem {
     sun.shadow.camera.far = 6000;
     scene.add(sun, sun.target, this.hemi);
     scene.fog = this.fog;
-    scene.environmentIntensity = 0.85;
+    scene.environmentIntensity = 0.7;
   }
 
   get skyObject(): THREE.Mesh {
@@ -349,7 +349,7 @@ export class SkySystem {
       fogCol.add(atm.radiance(_v, _c2));
     }
     fogCol.multiplyScalar(1 / 3 * 0.7).lerp(_c2.copy(this.skyAmbient).multiplyScalar(1.1), 0.25);
-    const fogLum = lum(fogCol), capLum = lum(this.skyAmbient) * 2.2 + 0.02;
+    const fogLum = lum(fogCol), capLum = lum(this.skyAmbient) * 1.8 + 0.02;
     if (fogLum > capLum) fogCol.multiplyScalar(capLum / fogLum);
     fogCol.add(_c2.copy(this.nightSky).multiplyScalar(2.2));
     const cityGlow = world ? Math.min(1, Math.log10(world.stats.population + 10) / 6) : 0;
@@ -402,7 +402,9 @@ export class SkySystem {
     sun.intensity = keyIntensity;
     this.hemi.color.copy(ambient).multiplyScalar(1 / Math.max(1e-3, Math.max(ambient.r, ambient.g, ambient.b)));
     this.hemi.groundColor.copy(this.groundColor).multiplyScalar(1 / Math.max(1e-3, Math.max(this.groundColor.r, this.groundColor.g, this.groundColor.b, 1e-3)));
-    this.hemi.intensity = lum(ambient) * 1.1 + 0.02;
+    // sky irradiance reaches PBR/Lambert/Phong materials through scene.environment (IBL);
+    // the hemisphere light is only a small fill for materials without IBL
+    this.hemi.intensity = lum(ambient) * 0.35 + 0.012;
     this.fitShadow(ctx, keyDir);
 
     // exposure & bloom adaptation

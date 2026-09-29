@@ -82,8 +82,8 @@ export class NetworkGraph {
       if (bidx[cy * s + cx] !== r) continue;
       let best = -1, bestD = Infinity;
       for (let ring = 1; ring <= CABLE_RANGE; ring++) {
-        // any cell on this ring is at least (ring - footprint half-size) away
-        if ((ring - Math.max(bw, bh)) ** 2 > bestD) break;
+        // every cell on this ring is at least `ring` cells from the centre
+        if (ring * ring > bestD) break;
         const x0 = cx - ring, x1 = cx + ring, y0 = cy - ring, y1 = cy + ring;
         for (let y = y0; y <= y1; y++) {
           if (y < 0 || y >= s) continue;
@@ -164,10 +164,7 @@ export class UtilitySolver {
     for (let c = 0; c < cc; c++) remaining[c] = compSupply[c];
     out.fill(0);
     const stats: UtilityOutcome = { produced, consumed: 0, connected: 0, compSupply, compServed };
-    if (!hasProducer) {
-      for (let r = 0; r < count; r++) if (!producer[r]) stats.consumed += 0;
-      return stats;
-    }
+    if (!hasProducer) return stats;
 
     // multi-source BFS from every producer footprint of a supplied network
     const comp = g.comp, queue = g.queue, visit = this.visit, seen = this.seen;
