@@ -106,12 +106,12 @@ export const DEATHCARE_PICKUP_MIN = 25;
 // ── economy ─────────────────────────────────────────────────────────────────
 /** $ per occupant per month at a 10 % tax rate, level 1, average land value */
 export const TAX_BASE: Record<TaxCategory, number> = {
-  resLow: 2.4,
-  resHigh: 2.1,
-  comLow: 3.6,
-  comHigh: 3.9,
-  office: 4.8,
-  industry: 3.1,
+  resLow: 1.6,
+  resHigh: 1.45,
+  comLow: 2.4,
+  comHigh: 2.6,
+  office: 2.9,
+  industry: 2.1,
 };
 export const LEVEL_TAX = [0, 1, 1.3, 1.7, 2.2, 2.8];
 export const TAX_MIN = 0;
@@ -122,8 +122,14 @@ export const BUDGET_MAX = 1.5;
 export const TAX_COMFORT = 0.12;
 /** $ per tourist per month */
 export const TOURIST_SPEND = 2.4;
-/** $ per unit of exported goods */
-export const EXPORT_PRICE = 1.15;
+/** $ the city earns (export duty) per unit of exported manufactured goods */
+export const EXPORT_PRICE = 0.07;
+/** $ the city earns per unit of exported raw material (farming, forestry, ore, oil) */
+export const RAW_EXPORT_PRICE = 0.09;
+/** share of commercial goods demand that imports can cover when connected */
+export const IMPORT_SHARE_MAX = 0.6;
+/** share of raw output that feeds local commerce directly (food, timber…) */
+export const RAW_LOCAL_SHARE = 0.3;
 /** transit fare per passenger by mode */
 export const TRANSIT_FARE: Record<TransitMode, number> = { bus: 1.5, tram: 1.8, metro: 2.2, train: 3, ferry: 3, monorail: 2.5 };
 /** $ per line vehicle per month */
@@ -149,7 +155,7 @@ export const LOAN_TIERS: LoanTier[] = [
 
 // ── commerce & industry ─────────────────────────────────────────────────────
 /** residents served per commercial job at balance */
-export const RESIDENTS_PER_COM_JOB = 6.4;
+export const RESIDENTS_PER_COM_JOB = 4.8;
 /** goods units needed per commercial job per day */
 export const GOODS_PER_COM_JOB = 1;
 /** goods produced per industrial worker per day at level 1 */
@@ -181,6 +187,31 @@ export const DEMAND_SMOOTHING = 0.14;
 /** job share targets of the private job market */
 export const COM_JOB_SHARE = 0.3;
 export const OFF_JOB_SHARE_MAX = 0.34;
+
+// ── labour market ───────────────────────────────────────────────────────────
+/** outside commuters available: base + share of population */
+export const COMMUTER_BASE = 60;
+export const COMMUTER_POP_SHARE = 0.22;
+/** share of a job shortfall that outside commuters fill */
+export const COMMUTER_FILL = 0.55;
+/** a service building keeps this share of effectiveness with no staff (skeleton crew) */
+export const STAFF_FLOOR = 0.3;
+
+// ── health, death, garbage ──────────────────────────────────────────────────
+/** share of residents sick at perfect / zero health */
+export const SICK_BASE = 0.008;
+export const SICK_RANGE = 0.075;
+/** days of production a garbage pile may reach before it is a problem / severe */
+export const GARBAGE_PROBLEM_DAYS = 6;
+export const GARBAGE_SEVERE_DAYS = 35;
+/** landfill intake per garbage truck per day, cemetery intake per hearse per day */
+export const LANDFILL_INTAKE_PER_VEHICLE = 70;
+export const CEMETERY_INTAKE_PER_VEHICLE = 3;
+/** days bodies may wait before the Dead problem appears / becomes severe */
+export const DEAD_PROBLEM_DAYS = 3;
+export const DEAD_SEVERE_DAYS = 12;
+/** days after a service category unlocks before its problems start to apply */
+export const SERVICE_GRACE_DAYS = 45;
 
 // ── chirper / advisor ───────────────────────────────────────────────────────
 export const CHIRP_MIN_GAP = 2;

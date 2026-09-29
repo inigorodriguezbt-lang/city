@@ -3,6 +3,7 @@
 // (mostly luminance) texture detail by the vertex colour.
 import * as THREE from 'three';
 import type { MatKey, ModelContext } from '../types';
+import { toColor, type ColorLike } from '../ModelBuilder';
 import type { StyleId } from '../../../core/types';
 
 export const C = {
@@ -79,19 +80,19 @@ const _a = new THREE.Color();
 const _b = new THREE.Color();
 
 /** Linear blend of two colours (0 = a, 1 = b) → hex. */
-export function mix(a: THREE.ColorRepresentation, b: THREE.ColorRepresentation, t: number): number {
-  return _a.set(a).lerp(_b.set(b), t).getHex();
+export function mix(a: ColorLike, b: ColorLike, t: number): number {
+  return toColor(a, _a).lerp(toColor(b, _b), t).getHex();
 }
 
 /** Multiply brightness (e.g. 0.85 = darker). */
-export function shade(c: THREE.ColorRepresentation, k: number): number {
-  _a.set(c);
+export function shade(c: ColorLike, k: number): number {
+  toColor(c, _a);
   return _a.setRGB(Math.min(1, _a.r * k), Math.min(1, _a.g * k), Math.min(1, _a.b * k)).getHex();
 }
 
 /** Small random brightness / hue jitter for variety. */
-export function jitter(c: THREE.ColorRepresentation, rnd: () => number, amount = 0.06): number {
-  _a.set(c);
+export function jitter(c: ColorLike, rnd: () => number, amount = 0.06): number {
+  toColor(c, _a);
   const k = 1 + (rnd() - 0.5) * 2 * amount;
   return _a.setRGB(Math.min(1, _a.r * k), Math.min(1, _a.g * k), Math.min(1, _a.b * k)).getHex();
 }

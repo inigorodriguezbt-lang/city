@@ -83,6 +83,12 @@ export class PolicySystem {
     this.dirty = true;
   }
 
+  /** city-wide effects (rebuilt lazily after toggles) */
+  cityFx(): Effects {
+    if (this.dirty) this.rebuild();
+    return this.city;
+  }
+
   rebuild(): void {
     const w = this.world;
     this.city = neutralEffects();

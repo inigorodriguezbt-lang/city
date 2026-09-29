@@ -31,7 +31,7 @@ const SEASON_NAMES = { spring: 'Spring', summer: 'Summer', autumn: 'Autumn', win
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 
 interface MenuButton {
-  id: PanelId | 'photo' | 'menu';
+  id: PanelId | 'photo' | 'menu' | 'more';
   icon: IconName;
   label: string;
   key?: ActionId;
@@ -159,16 +159,18 @@ export class TopBar {
       { id: 'notices', icon: 'bell', label: 'Notifications' },
       { id: 'search', icon: 'search', label: 'Search buildings & tools', key: 'ui.search' },
       { id: 'photo', icon: 'aperture', label: 'Photo mode', key: 'ui.photoMode' },
+      { id: 'more', icon: 'grip', label: 'More' },
       { id: 'menu', icon: 'menu', label: 'Game menu', keyText: 'Esc' },
     ];
     this.badge = h('span', { class: 'hud-badge' });
     const right = h('div', { class: 'hud-pill hud-pe hud-top-right' });
     for (const m of this.menu) {
-      const b = h('button', { class: 'hud-mbtn', 'aria-label': m.label }, icon(m.icon, 19));
+      const b = h('button', { class: 'hud-mbtn', 'aria-label': m.label, 'data-id': m.id }, icon(m.icon, 19));
       if (m.id === 'notices') b.appendChild(this.badge);
       if (m.id === 'overlays') b.classList.add('hud-mbtn-accent');
       b.onclick = () => {
         if (m.id === 'photo') ctx.ui.setPhotoMode(true);
+        else if (m.id === 'more') ctx.ui.toggleMore();
         else if (m.id === 'menu') {
           ctx.sfx('open');
           ctx.game.menus.openPause();
@@ -177,7 +179,7 @@ export class TopBar {
       t.attach(b, m.label, { key: () => (m.key ? ctx.key(m.key) : m.keyText ?? '') });
       m.el = b;
       right.appendChild(b);
-      if (m.id === 'overlays' || m.id === 'transit' || m.id === 'search') right.appendChild(h('div', { class: 'hud-sep slim' }));
+      if (m.id === 'overlays' || m.id === 'transit' || m.id === 'search') right.appendChild(h('div', { class: 'hud-sep slim', 'data-after': m.id }));
     }
 
     this.el = h('header', { class: 'hud-top' }, left, center, right);
@@ -249,7 +251,7 @@ export class TopBar {
     if (next) {
       const p = Math.max(0, Math.min(1, (pop - cur.population) / Math.max(1, next.population - cur.population)));
       setVar(this.msFill, '--p', p.toFixed(3));
-      setText(this.msName, `${next.name} · ${Math.floor(p * 100)}%`);
+      setText(this.msName, `${Math.floor(p * 100)}% to ${next.name}`);
     } else {
       setVar(this.msFill, '--p', '1');
       setText(this.msName, cur.name);
@@ -399,7 +401,7 @@ export class TopBar {
     const inc = top(this.proj.income), exp = top(this.proj.expense);
     const rows: [string, string, ('good' | 'bad' | '')?][] = [];
     for (const [k, v] of inc) rows.push([flowLabel(k), '+' + formatMoney(v), 'good']);
-    for (const [k, v] of exp) rows.push([flowLabel(k), '-' + formatMoney(v), 'bad']);
+    for (const [k, v] of exp) rows.push([flowLabel(k, true), '-' + formatMoney(v), 'bad']);
     const loans = w.economy.loans.reduce((s, l) => s + l.remaining, 0);
     if (loans > 0) rows.push(['Outstanding loans', formatMoney(loans)]);
     return richTip({

@@ -469,8 +469,8 @@ export const BUILDINGS: BuildingDef[] = [
   },
   {
     id: 'ferris_wheel', name: 'Ferris Wheel', icon: '🎡', category: 'parks', group: 'Attractions',
-    description: 'A 60 m observation wheel with glowing gondolas. The city\'s favourite date spot.',
-    w: 2, h: 2, cost: 38_000, upkeep: 1_400, unlock: 5, model: 'ferris_wheel', height: 62, jobs: 12,
+    description: 'A 50 m observation wheel with glowing gondolas. The city\'s favourite date spot.',
+    w: 3, h: 2, cost: 38_000, upkeep: 1_400, unlock: 5, model: 'ferris_wheel', height: 50, jobs: 12,
     effects: [fx('leisure', 20, 140), fx('tourism', 20, 110), fx('landValue', 10, 40)], attractiveness: 35, tags: ['park', 'wheel', 'ride', 'view', 'tourism'],
   },
   {

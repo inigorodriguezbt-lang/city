@@ -33,6 +33,16 @@ export interface BSim {
   sick: number;
   /** days with land value too high for the building's level */
   hr: number;
+  /** consecutive problem-free days while abandoned (recovery) */
+  rc: number;
+  /** total construction days of this building (set at spawn) */
+  bd: number;
+  /** code of the requirement blocking the next level (see lifecycle.LevelBlock) */
+  lr: number;
+  /** estimated taxes paid per month at current rates ($) */
+  tx: number;
+  /** 1 once the terminal (rubble) state has been seen */
+  tf: number;
   /** consumption multipliers from policies (read by consumption.ts) */
   pm?: number;
   wm?: number;
@@ -41,7 +51,13 @@ export interface BSim {
 }
 
 export function newBSim(): BSim {
-  return { lp: 0, np: 0, nw: 0, ns: 0, nr: 0, nwk: 0, ncu: 0, ngd: 0, dead: 0, dd: 0, cd: 0, up: 0, st: 0, zm: 0, pp: 0, sick: 0, hr: 0 };
+  // Fields that hold fractions start as -0 (a heap double, numerically zero) so the
+  // engine picks a double representation up front instead of migrating thousands
+  // of objects the first time a value becomes fractional.
+  return {
+    lp: -0, np: -0, nw: -0, ns: -0, nr: -0, nwk: -0, ncu: -0, ngd: -0, dead: 0, dd: -0, cd: -0, up: -0, st: -0, zm: -0, pp: 0, sick: 0,
+    hr: -0, rc: -0, bd: 10.5, lr: 0, tx: 0, tf: 0, pm: 1.5, wm: 1.5, sm: 1.5, gm: 1.5,
+  };
 }
 
 /** Get (creating on demand) a building's simulation state. */
@@ -153,12 +169,33 @@ export interface Metrics {
   /** consecutive months meeting the "clean city" criterion etc. are computed live */
   maxLevel5: number;
   policiesEnacted: number;
+  /** consecutive months with average happiness >= 85 */
+  happyStreak: number;
+  /** consecutive months with pollution below 6 % (population >= 5000) */
+  cleanStreak: number;
+  /** consecutive months with unemployment below 5 % (population >= 2000) */
+  employStreak: number;
+  maxMonthlyIncome: number;
+  maxNetIncome: number;
+  maxLandValue: number;
+  recovered: number;
+  autoBulldozed: number;
+  densified: number;
+  /** most loans held at the same time */
+  maxLoans: number;
+  /** lowest money ever reached after going into debt, then recovered above 100k */
+  comeback: number;
+  /** sum of births / deaths ever */
+  totalBirths: number;
+  totalDeaths: number;
 }
 
 export function defaultMetrics(): Metrics {
   return {
     months: 0, maxPopulation: 0, maxMoney: 0, minMoney: 0, profitStreak: 0, disasters: 0, loansTaken: 0, loansRepaid: 0,
     chirps: 0, abandonedEver: 0, levelUps: 0, spawned: 0, maxTourists: 0, maxExports: 0, maxLevel5: 0, policiesEnacted: 0,
+    happyStreak: 0, cleanStreak: 0, employStreak: 0, maxMonthlyIncome: 0, maxNetIncome: 0, maxLandValue: 0, recovered: 0,
+    autoBulldozed: 0, densified: 0, maxLoans: 0, comeback: 0, totalBirths: 0, totalDeaths: 0,
   };
 }
 
@@ -188,6 +225,12 @@ export interface SimState {
   advisor: { next: number; cd: Record<string, number> };
   /** exports sold in the current month ($) */
   monthExports: number;
+  /** first day each service category was found unlocked (drives SERVICE_GRACE_DAYS) */
+  svcUnlock: Record<string, number>;
+  /** highest milestone whose unlock hints were already given by the advisor */
+  hintedMilestone: number;
+  /** last month a bankruptcy warning was shown */
+  bankruptWarned: number;
 }
 
 export function defaultSimState(seed: number): SimState {
@@ -209,6 +252,9 @@ export function defaultSimState(seed: number): SimState {
     chirp: { next: 3, cd: {}, recent: [], queue: [] },
     advisor: { next: 4, cd: {} },
     monthExports: 0,
+    svcUnlock: {},
+    hintedMilestone: 0,
+    bankruptWarned: -1,
   };
 }
 
@@ -235,6 +281,9 @@ export function loadSimState(world: World): SimState {
   if (!Array.isArray(s.chirp.queue)) s.chirp.queue = [];
   if (!Array.isArray(s.chirp.recent)) s.chirp.recent = [];
   s.advisor = { ...d.advisor, ...s.advisor };
+  if (!s.advisor.cd || typeof s.advisor.cd !== 'object') s.advisor.cd = {};
+  if (!s.chirp.cd || typeof s.chirp.cd !== 'object') s.chirp.cd = {};
+  if (!s.svcUnlock || typeof s.svcUnlock !== 'object') s.svcUnlock = {};
   for (const key of ['births', 'deaths', 'movedIn', 'movedOut'] as const) {
     if (!Array.isArray(s.roll?.[key]) || s.roll[key].length !== 30) s.roll = d.roll;
   }

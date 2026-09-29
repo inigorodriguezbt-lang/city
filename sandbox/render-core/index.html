@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>URBIS · render-core sandbox</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0f16; }
+      #view { position: absolute; inset: 0; }
+      #hud { position: absolute; left: 8px; top: 8px; font: 11px/1.4 ui-monospace, monospace; color: #e8eef5; background: rgba(10, 14, 22, 0.55); padding: 4px 8px; border-radius: 4px; pointer-events: none; white-space: pre; }
+      body.clean #hud { display: none; }
+    </style>
+  </head>
+  <body>
+    <div id="view"></div>
+    <div id="hud">loading…</div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

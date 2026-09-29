@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 
 export interface SharedUniforms {
+  [k: string]: THREE.IUniform;
   /** real seconds since the renderer started (ambient animation: waves, clouds, sway) */
   uTime: { value: number };
   /** normalized wind direction on the XZ plane (x → +X, y → +Z) */
@@ -27,8 +28,14 @@ export interface SharedUniforms {
   uNoise: { value: THREE.Texture | null };
   /** map extent in meters (size * CELL) */
   uMapSize: { value: number };
-  /** 0..1 info-view (overlay) strength; render-core terrain writes alpha 0 where it shows data */
+  /** 0..1 info-view (overlay) strength */
   uInfoView: { value: number };
+  /** cloud deck coverage 0..1 and drift offset (m) — see CLOUD_GLSL */
+  uCloudCover: { value: number };
+  uCloudOffset: { value: THREE.Vector2 };
+  /** nominal sea level and current flood offset (m) */
+  uSeaLevel: { value: number };
+  uFlood: { value: number };
 }
 
 export function createSharedUniforms(): SharedUniforms {
@@ -45,5 +52,9 @@ export function createSharedUniforms(): SharedUniforms {
     uNoise: { value: null },
     uMapSize: { value: 4096 },
     uInfoView: { value: 0 },
+    uCloudCover: { value: 0.2 },
+    uCloudOffset: { value: new THREE.Vector2() },
+    uSeaLevel: { value: 0 },
+    uFlood: { value: 0 },
   };
 }

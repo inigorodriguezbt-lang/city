@@ -13,7 +13,7 @@
 //   aFac  (u8×4): facade code for wall_* (window kind, width, height, flags)
 // Geometry without them falls back to sensible defaults.
 import * as THREE from 'three';
-import type { MatKey } from './types';
+import { MAT_KEYS, type MatKey } from './types';
 
 // ── shared uniforms (one object per uniform, referenced by every program) ──
 const U = {
@@ -73,6 +73,10 @@ const LOD_TYPE = 40;
 // ── GLSL ────────────────────────────────────────────────────────────────────
 const VERT_PARS = /* glsl */ `
 attribute vec4 aInfo;
+#ifdef B_UBER
+attribute float aMat;
+flat varying float vBMat;
+#endif
 varying vec3 vBWPos;
 varying vec3 vBWNrm;
 varying vec2 vBUv;
@@ -113,6 +117,9 @@ const VERT_MAIN = /* glsl */ `
   vBWNrm = normalize(mat3(modelMatrix) * objectNormal);
   vBUv = uv;
   vBInfo = aInfo;
+#ifdef B_UBER
+  vBMat = aMat;
+#endif
 #ifdef B_FAC
   vBFac = aFac;
 #endif
@@ -132,6 +139,9 @@ varying vec2 vBUv;
 flat varying vec4 vBInfo;
 #ifdef B_FAC
 flat varying vec4 vBFac;
+#endif
+#ifdef B_UBER
+flat varying float vBMat;
 #endif
 
 uint bHash(uint x) {
@@ -541,6 +551,9 @@ vec3 bStone(vec2 uv, vec3 c, float mpp, bool alt, inout float h) {
 // Main surface pass (after <color_fragment>): fills bO from the vertex color.
 const FRAG_MAIN = /* glsl */ `
 #include <color_fragment>
+#ifdef B_UBER
+int bType = int(vBMat + 0.5);
+#endif
 vec3 bN = normalize(vBWNrm);
 vec3 bV = normalize(vBWPos - cameraPosition);
 float bNdV = clamp(dot(-bV, bN), 0.0, 1.0);
@@ -565,8 +578,13 @@ vec3 bRdT = vec3(dot(bV, bTu), dot(bV, bBw), dot(bV, bN));
 uint bFace = uint(int(floor(atan(bN.z, bN.x) * 1.27324 + 4.5)) & 7);
 BOut bO;
 bO.alb = diffuseColor.rgb;
+#ifdef B_UBER
+bO.rough = B_ROUGH[bType];
+bO.metal = B_METAL[bType];
+#else
 bO.rough = roughness;
 bO.metal = metalness;
+#endif
 bO.emit = vec3(0.0);
 bO.h = 0.0;
 bO.refl = 0.0;
@@ -1113,6 +1131,32 @@ bO.alb *= 0.75 + 0.4 * bVN(vec2(atan(bN.z, bN.x) * 4.0, vBWPos.y * 6.0));
   }
 }
 #endif
+// ── building state tints (all materials) ──
+if ((bCond & 1u) != 0u) {
+  // abandoned: grime, desaturation, dead signage
+  float g = bFbm(vBWPos.xz * 0.21 + vec2(vBWPos.y * 0.37));
+  float l = bLum(bO.alb);
+  bO.alb = mix(bO.alb, vec3(l), 0.4) * (0.7 + 0.16 * g);
+  float streaks = smoothstep(0.45, 0.85, bVN(vec2(dot(vBWPos.xz, vec2(0.7, 0.7)) * 1.7, vBWPos.y * 0.25)));
+  bO.alb = mix(bO.alb, vec3(0.2, 0.18, 0.14), 0.22 * streaks);
+  bO.emit *= 0.15;
+  bO.refl *= 0.5;
+}
+if ((bCond & 2u) != 0u) {
+  // burned: charred, sooty, matte
+  float s = bFbm(vBWPos.xz * 0.35 + vec2(vBWPos.y * 0.45));
+  bO.alb = mix(bO.alb * 0.2, vec3(0.025, 0.022, 0.02), smoothstep(0.3, 0.7, s));
+  bO.rough = 0.95;
+  bO.metal = 0.0;
+  bO.refl *= 0.05;
+  if ((bCond & 8u) == 0u) bO.emit *= 0.0;
+  else bO.emit += vec3(1.0, 0.28, 0.05) * 0.8 * smoothstep(0.55, 0.8, s) * (0.6 + 0.4 * bVN(vec2(uTime * 5.0, vBWPos.y)));
+}
+if ((bCond & 8u) != 0u) {
+  // on fire: flickering orange glow washing over the surfaces
+  float fl = 0.55 + 0.45 * bVN(vec2(uTime * 6.0 + vBWPos.x * 0.2, vBWPos.y * 0.4 - uTime * 2.0));
+  bO.emit += vec3(1.0, 0.36, 0.08) * 0.22 * fl * max(0.2, 1.0 - abs(bN.y));
+}
 diffuseColor.rgb = bO.alb;
 `;
 
@@ -1156,20 +1200,71 @@ interface Variant {
   anim: boolean;
 }
 
+/** material type id of the chunk "uber" material (type chosen per vertex via aMat) */
+const UBER = -1;
+
+/** Convert the compile-time `#if BTYPE …` dispatch of FRAG_MAIN into runtime
+ *  branches on `bType` (flat per-triangle, so branches stay coherent). */
+function toRuntime(src: string): string {
+  const out: string[] = [];
+  const stack: boolean[] = [];
+  const cond = (l: string) => l.replace(/^#(el)?if\s+/, '').replace(/\bBTYPE\b/g, 'bType');
+  for (const raw of src.split('\n')) {
+    const l = raw.trim();
+    if (/^#if\s.*\bBTYPE\b/.test(l)) {
+      stack.push(true);
+      out.push(`if (${cond(l)}) {`);
+    } else if (/^#elif\s.*\bBTYPE\b/.test(l)) {
+      out.push(`} else if (${cond(l)}) {`);
+    } else if (/^#else\b/.test(l) && stack[stack.length - 1]) {
+      out.push('} else {');
+    } else if (/^#if(n?def)?\b/.test(l)) {
+      stack.push(false);
+      out.push(raw);
+    } else if (/^#endif\b/.test(l)) {
+      out.push(stack.pop() ? '}' : raw);
+    } else out.push(raw.replace(/\bBTYPE\b/g, 'bType'));
+  }
+  return out.join('\n');
+}
+
+let FRAG_MAIN_RT: string | null = null;
+let RM_TABLES: string | null = null;
+function roughMetalTables(): string {
+  if (RM_TABLES) return RM_TABLES;
+  const n = LOD_TYPE + 1;
+  const r = new Array<number>(n).fill(0.8), m = new Array<number>(n).fill(0);
+  for (const k of MAT_KEYS) {
+    const sp = SPECS[k];
+    r[sp.type] = sp.rough;
+    m[sp.type] = sp.metal;
+  }
+  const f = (v: number) => v.toFixed(3);
+  RM_TABLES = `const float B_ROUGH[${n}] = float[${n}](${r.map(f).join(',')});\nconst float B_METAL[${n}] = float[${n}](${m.map(f).join(',')});\n`;
+  return RM_TABLES;
+}
+
 function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, type: number, fac: boolean, v: Variant): void {
   Object.assign(shader.uniforms, U);
   shader.defines = shader.defines ?? {};
-  shader.defines.BTYPE = type;
-  if (fac) shader.defines.B_FAC = '';
+  const uber = type === UBER;
+  if (uber) {
+    shader.defines.B_UBER = '';
+    shader.defines.B_FAC = '';
+  } else {
+    shader.defines.BTYPE = type;
+    if (fac) shader.defines.B_FAC = '';
+  }
   if (v.anim) shader.defines.B_ANIM = '';
+  if (uber && !FRAG_MAIN_RT) FRAG_MAIN_RT = toRuntime(FRAG_MAIN);
   shader.vertexShader = shader.vertexShader
     .replace('#include <common>', '#include <common>\n' + VERT_PARS)
     .replace('#include <beginnormal_vertex>', VERT_NORMAL)
     .replace('#include <begin_vertex>', VERT_BEGIN)
     .replace('#include <worldpos_vertex>', VERT_MAIN);
   shader.fragmentShader = shader.fragmentShader
-    .replace('#include <common>', '#include <common>\n' + FRAG_PARS)
-    .replace('#include <color_fragment>', FRAG_MAIN)
+    .replace('#include <common>', '#include <common>\n' + FRAG_PARS + (uber ? roughMetalTables() : ''))
+    .replace('#include <color_fragment>', uber ? FRAG_MAIN_RT! : FRAG_MAIN)
     .replace('#include <roughnessmap_fragment>', FRAG_ROUGH)
     .replace('#include <metalnessmap_fragment>', FRAG_METAL)
     .replace('#include <normal_fragment_maps>', FRAG_NORMAL)
@@ -1177,11 +1272,12 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, type: num
 }
 
 function makeMaterial(name: string, type: number, rough: number, metal: number, v: Variant): THREE.MeshStandardMaterial {
-  const fac = (type >= 1 && type <= 9) || type === LOD_TYPE;
+  const fac = (type >= 1 && type <= 9) || type === LOD_TYPE || type === UBER;
   const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: rough, metalness: metal });
   m.name = `bld:${name}${v.anim ? ':anim' : ''}`;
   const defaults: Record<string, number[]> = { aInfo: DEFAULT_INFO };
   if (fac) defaults.aFac = [0, 0, 0, 0];
+  if (type === UBER) defaults.aMat = [SPECS.plain.type];
   if (v.anim) {
     defaults.aPivot = [0, 0, 0];
     defaults.aAxis = [0, 1, 0];
@@ -1249,6 +1345,25 @@ export function getAnimDepthMaterials(): { depth: THREE.Material; distance: THRE
   if (!depthAnim) depthAnim = makeDepthMaterial(false);
   if (!distAnim) distAnim = makeDepthMaterial(true);
   return { depth: depthAnim, distance: distAnim };
+}
+
+let uberMat: THREE.MeshStandardMaterial | null = null;
+let uberAnimMat: THREE.MeshStandardMaterial | null = null;
+
+/** Numeric shader type of a material key (the per-vertex `aMat` value for chunk meshes). */
+export function matTypeId(key: MatKey): number {
+  return (SPECS[key] ?? SPECS.plain).type;
+}
+/** aMat value for far-LOD box geometry drawn with the chunk material. */
+export const LOD_MAT_ID = LOD_TYPE;
+
+/** Single "uber" material used by merged building chunks: the surface type is
+ *  chosen per vertex (attribute `aMat`, see matTypeId) so a whole chunk — any
+ *  mix of walls, roofs, glass, ground and LOD boxes — renders in ONE draw call.
+ *  `anim` adds the vertex-rotation attributes of getAnimMaterial. */
+export function getChunkMaterial(anim = false): THREE.Material {
+  if (anim) return (uberAnimMat ??= makeMaterial('chunk', UBER, 0.8, 0, { anim: true }));
+  return (uberMat ??= makeMaterial('chunk', UBER, 0.8, 0, { anim: false }));
 }
 
 /** Material for merged far-LOD boxes (vertex color walls/roofs + simplified lit window grid from aFac.x). */
@@ -1364,6 +1479,9 @@ export function disposeMaterials(): void {
   animCache.clear();
   lodMat?.dispose();
   lodMat = null;
+  uberMat?.dispose();
+  uberAnimMat?.dispose();
+  uberMat = uberAnimMat = null;
   depthAnim?.dispose();
   distAnim?.dispose();
   depthAnim = distAnim = null;

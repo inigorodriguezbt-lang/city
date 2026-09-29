@@ -1,10 +1,33 @@
-// STUB — owned by the "render-core" agent. Public API is FROZEN (add, don't change).
+// GameRenderer — three.js core for URBIS: renderer + depth strategy, camera,
+// sky & lighting, terrain, water, trees, overlays, post-processing, picking.
+//
+// Depth precision (12 km world, 1 m details):
+//  • When EXT_clip_control is available the renderer runs with a REVERSED
+//    depth buffer and the scene renders into a 32-bit float depth texture —
+//    near-uniform precision from 0.25 m to the horizon.
+//  • Otherwise the near plane follows the camera altitude (0.8–60 m) so a
+//    standard 24-bit buffer keeps road/terrain separation at every zoom.
+//  Other renderers: lift decals (roads, zones) by ROAD_LIFT and use
+//  polygonOffset (factor -1..-2, units -1..-4); never write gl_FragDepth;
+//  include three's fog chunks (`fog: true`) so aerial perspective matches.
 import * as THREE from 'three';
 import type { Game } from '../game/Game';
 import type { World } from '../world/World';
 import type { Cell, FieldId } from '../core/types';
+import { Layer } from '../core/types';
 import type { Settings } from '../settings/types';
+import { CELL, CHUNK } from '../core/constants';
+import { calendar } from '../core/time';
 import { CameraController } from './CameraController';
+import { createSharedUniforms, type SharedUniforms } from './sky/SharedUniforms';
+import { SkySystem } from './sky/SkySystem';
+import { createTextureSet, type TextureSet } from './textures/procedural';
+import { TerrainRenderer } from './terrain/TerrainRenderer';
+import { pickHeightfield } from './terrain/pick';
+import { WaterRenderer } from './water/WaterRenderer';
+import { TreeRenderer } from './props/TreeRenderer';
+import { OverlayRenderer, INFO_VIEW_DESAT } from './overlay/OverlayRenderer';
+import { PostFX } from './post/PostFX';
 
 export interface PickResult {
   cell: Cell;
@@ -36,6 +59,13 @@ export interface LightingInfo {
   ambientColor: THREE.Color;
 }
 
+const SHADOW_RADIUS_BY_QUALITY: Record<Settings['graphics']['shadows'], number> = { off: 0, low: 650, medium: 1000, high: 1500 };
+
+function smooth01(x: number, a: number, b: number): number {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+}
+
 export class GameRenderer {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
@@ -50,50 +80,381 @@ export class GameRenderer {
   overlay: FieldId | null = null;
   protected world: World | null = null;
 
+  // ── additive public API ────────────────────────────────────────────────
+  /** live uniforms (time, wind, sun, weather, noise) any material may share */
+  readonly shared: SharedUniforms = createSharedUniforms();
+  /** procedural textures (noise, water normals, detail normals) */
+  readonly textures: TextureSet;
+  readonly sky: SkySystem;
+  readonly post: PostFX;
+  /** true when the reversed float depth buffer is active */
+  readonly reversedDepth: boolean;
+  terrain: TerrainRenderer | null = null;
+  water: WaterRenderer | null = null;
+  trees: TreeRenderer | null = null;
+  overlays: OverlayRenderer | null = null;
+  /** current render radius in meters (renderDistance × CHUNK × CELL) */
+  renderRadius = 10 * CHUNK * CELL;
+
+  private container: HTMLElement;
+  private settingsCache: Settings['graphics'] | null = null;
+  private time = 0;
+  private frameStart = 0;
+  private fpsAcc = 0;
+  private fpsFrames = 0;
+  private worldUnsub: (() => void)[] = [];
+  private viewInfo: ViewInfo;
+  private frustum = new THREE.Frustum();
+  private projView = new THREE.Matrix4();
+  private resizeObserver: ResizeObserver | null = null;
+  private fogEnabled = true;
+  private cloudsEnabled = true;
+  private treeDensity = 1;
+  private shadowRadius = 1000;
+  private lastSize = new THREE.Vector2(-1, -1);
+  private whiteBalance = new THREE.Color(1, 1, 1);
+  private readonly _ndc = new THREE.Vector2();
+  private readonly _rc = new THREE.Raycaster();
+  private readonly _v = new THREE.Vector3();
+
   constructor(protected game: Game, container: HTMLElement) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance', preserveDrawingBuffer: false });
-    this.canvas = this.renderer.domElement;
+    this.container = container;
+    const params = {
+      antialias: false,
+      powerPreference: 'high-performance',
+      preserveDrawingBuffer: false,
+      stencil: false,
+      alpha: false,
+      reversedDepthBuffer: true,
+    } as THREE.WebGLRendererParameters;
+    this.renderer = new THREE.WebGLRenderer(params);
+    const r = this.renderer;
+    this.reversedDepth = !!(r.capabilities as unknown as { reversedDepthBuffer?: boolean }).reversedDepthBuffer;
+    r.toneMapping = THREE.ACESFilmicToneMapping;
+    r.outputColorSpace = THREE.SRGBColorSpace;
+    r.shadowMap.enabled = true;
+    r.shadowMap.type = THREE.PCFShadowMap;
+    r.info.autoReset = false;
+    r.setClearColor(0x000000, 1);
+    this.canvas = r.domElement;
+    this.canvas.style.display = 'block';
+    this.canvas.style.touchAction = 'none';
     container.appendChild(this.canvas);
     this.camera = new THREE.PerspectiveCamera(50, 1, 1, 40000);
+    this.camera.position.set(0, 400, 400);
     this.cameraCtl = new CameraController(game, this.camera);
-    this.scene.add(new THREE.HemisphereLight(0xbfd8ff, 0x445533, 1.2));
-    const onResize = () => {
-      const w = container.clientWidth || window.innerWidth, h = container.clientHeight || window.innerHeight;
-      this.renderer.setSize(w, h, false);
-      this.canvas.style.width = '100%';
-      this.canvas.style.height = '100%';
-      this.camera.aspect = w / h;
-      this.camera.updateProjectionMatrix();
-    };
+    this.scene.matrixWorldAutoUpdate = true;
+
+    this.textures = createTextureSet();
+    this.shared.uNoise.value = this.textures.noise;
+    this.sky = new SkySystem(r, this.scene, this.shared, this.lighting, this.textures.noise);
+    this.post = new PostFX(r, this.scene, this.camera, this.shared);
+
+    this.viewInfo = { focusX: 0, focusY: 0, radiusCells: 320, cameraPos: this.camera.position, altitude: 200, frustum: this.frustum };
+
+    const onResize = () => this.resize();
     window.addEventListener('resize', onResize);
-    onResize();
+    if (typeof ResizeObserver !== 'undefined') {
+      this.resizeObserver = new ResizeObserver(onResize);
+      this.resizeObserver.observe(container);
+    }
+    this.resize();
   }
 
-  async init(): Promise<void> {}
-  onWorldLoaded(world: World): void { this.world = world; this.cameraCtl.onWorldLoaded(world); }
-  onWorldUnloaded(): void { this.world = null; }
-  update(dt: number): void { this.cameraCtl.update(dt); }
-  render(): void { this.renderer.render(this.scene, this.camera); }
+  private resize(): void {
+    const w = this.container.clientWidth || window.innerWidth;
+    const h = this.container.clientHeight || window.innerHeight;
+    const s = this.settingsCache;
+    const pr = Math.min(window.devicePixelRatio || 1, 2) * (s ? s.resolutionScale : 1);
+    const key = w * 10000 + h + pr * 1e9;
+    if (this.lastSize.x === key) return;
+    this.lastSize.x = key;
+    this.renderer.setPixelRatio(pr);
+    this.renderer.setSize(w, h, false);
+    this.canvas.style.width = '100%';
+    this.canvas.style.height = '100%';
+    this.camera.aspect = w / Math.max(1, h);
+    this.camera.updateProjectionMatrix();
+    const buf = this.renderer.getDrawingBufferSize(this._ndc);
+    this.post.setSize(buf.x, buf.y);
+  }
 
-  pick(_clientX: number, _clientY: number): PickResult | null { return null; }
+  async init(): Promise<void> {
+    // compile the always-present programs up front (sky)
+    this.renderer.compile(this.scene, this.camera);
+  }
+
+  onWorldLoaded(world: World): void {
+    this.onWorldUnloaded();
+    this.world = world;
+    this.shared.uMapSize.value = world.size * CELL;
+    this.shared.uSeaLevel.value = world.seaLevel;
+    this.shared.uFlood.value = world.floodOffset;
+    this.cameraCtl.onWorldLoaded(world);
+    const terrain = (this.terrain = new TerrainRenderer(world, this.shared, this.textures.detailNormal));
+    const water = (this.water = new WaterRenderer(world, this.shared, terrain, this.textures.waterNormal));
+    const trees = (this.trees = new TreeRenderer(world, this.shared));
+    trees.minHeight = terrain.minHeight;
+    trees.maxHeight = terrain.maxHeight;
+    this.overlays = new OverlayRenderer(world, this.shared, terrain);
+    this.scene.add(terrain.group, water.group, trees.group);
+    const ev = this.game.events;
+    this.worldUnsub.push(
+      ev.on('world:changed', ({ rect, layers }) => {
+        this.terrain?.onWorldChanged(rect, layers);
+        this.water?.onWorldChanged(rect, layers);
+        this.trees?.onWorldChanged(rect, layers);
+        if (layers & (Layer.Road | Layer.Water)) this.overlays?.onFieldsUpdated(null);
+        if (this.trees && this.terrain) {
+          this.trees.minHeight = this.terrain.minHeight;
+          this.trees.maxHeight = this.terrain.maxHeight;
+        }
+      }),
+      ev.on('fields:updated', (ids) => this.overlays?.onFieldsUpdated(ids)),
+      ev.on('weather:changed', () => this.sky.invalidateEnvironment()),
+    );
+    if (this.overlay) this.overlays.setField(this.overlay);
+    this.sky.invalidateEnvironment();
+  }
+
+  onWorldUnloaded(): void {
+    for (const u of this.worldUnsub) u();
+    this.worldUnsub.length = 0;
+    if (this.terrain) this.scene.remove(this.terrain.group);
+    if (this.water) this.scene.remove(this.water.group);
+    if (this.trees) this.scene.remove(this.trees.group);
+    this.overlays?.dispose();
+    this.trees?.dispose();
+    this.water?.dispose();
+    this.terrain?.dispose();
+    this.overlays = null;
+    this.trees = null;
+    this.water = null;
+    this.terrain = null;
+    this.cameraCtl.onWorldUnloaded();
+    this.world = null;
+  }
+
+  update(dt: number): void {
+    this.resize();
+    this.time += dt;
+    this.shared.uTime.value = this.time;
+    const ctl = this.cameraCtl;
+    ctl.update(dt);
+    const cam = this.camera;
+    const w = this.world;
+
+    // dynamic near / far planes
+    const alt = Math.max(1, Math.min(ctl.altitude, ctl.distance));
+    cam.near = this.reversedDepth ? THREE.MathUtils.clamp(alt * 0.04, 0.25, 8) : THREE.MathUtils.clamp(alt * 0.22, 0.8, 60);
+    const density = Math.max(this.sky.fog.density, 1e-6);
+    cam.far = THREE.MathUtils.clamp(Math.max(3.2 / density, this.renderRadius * 1.5, 9000), 9000, 90000);
+    cam.updateProjectionMatrix();
+    cam.updateMatrixWorld();
+
+    // world-dependent systems
+    if (w && this.terrain) {
+      this.updateSeason(w);
+      this.terrain.update(cam);
+      this.water?.update(ctl.focus.x, ctl.focus.y);
+      this.trees?.update({ camera: cam, radius: this.renderRadius, shadowRadius: this.shadowRadius, density: this.treeDensity });
+    }
+    this.overlays?.update(dt, this.lighting.night);
+
+    // sky, lights, fog
+    const focusW = this._v.set(ctl.focus.x * CELL, ctl.focusHeight, ctl.focus.y * CELL);
+    this.sky.update({
+      world: w,
+      camera: cam,
+      focus: focusW,
+      distance: ctl.distance,
+      renderRadius: this.renderRadius,
+      fogEnabled: this.fogEnabled,
+      cloudsEnabled: this.cloudsEnabled,
+      viewportHeight: this.renderer.getDrawingBufferSize(this._ndc).y,
+      dt,
+      time: this.time,
+    });
+
+    // view info for other renderers
+    this.projView.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+    this.frustum.setFromProjectionMatrix(this.projView, cam.coordinateSystem, (cam as unknown as { reversedDepth?: boolean }).reversedDepth ?? false);
+    const vi = this.viewInfo;
+    vi.focusX = ctl.focus.x;
+    vi.focusY = ctl.focus.y;
+    vi.radiusCells = Math.round(this.renderRadius / CELL);
+    vi.cameraPos = cam.position;
+    vi.altitude = ctl.altitude;
+    vi.frustum = this.frustum;
+  }
+
+  /** seasonal parameters for terrain + vegetation (continuous through the year) */
+  private updateSeason(w: World): void {
+    const theme = w.theme;
+    const cal = calendar(w.time.day);
+    const yp = cal.yearProgress;
+    const tc = Math.cos(2 * Math.PI * (yp - 0.55)); // +1 mid-July, -1 mid-January
+    const summer = smooth01(tc, 0.2, 0.9);
+    const winter = smooth01(-tc, 0.2, 0.9);
+    const seasonal = Math.min(1, theme.tempSwing / 11);
+    const tropical = theme.tempMean > 21;
+    let leaf = 1, spring = 0, autumn = 0, blossom = 0;
+    if (!tropical) {
+      const bud = smooth01(yp, 0.19, 0.3);
+      const fall = 1 - smooth01(yp, 0.84, 0.95);
+      leaf = Math.min(bud, fall);
+      leaf = 1 - (1 - leaf) * seasonal;
+      if (theme.id === 'mediterranean') leaf = Math.max(leaf, 0.35);
+      spring = smooth01(yp, 0.19, 0.28) * (1 - smooth01(yp, 0.32, 0.46));
+      autumn = smooth01(yp, 0.69, 0.83) * seasonal;
+      blossom = smooth01(yp, 0.21, 0.26) * (1 - smooth01(yp, 0.29, 0.36));
+    } else {
+      spring = 0.25;
+      blossom = smooth01(yp, 0.2, 0.25) * (1 - smooth01(yp, 0.3, 0.38)) * 0.8;
+    }
+    this.trees?.setSeason(leaf, spring, autumn, blossom);
+    const tu = this.terrain!.uniforms;
+    const dryness = 1 - theme.rainfall;
+    tu.uDry.value = THREE.MathUtils.clamp(dryness * 0.35 + summer * (0.12 + dryness * 0.45) + winter * 0.18 * seasonal - spring * 0.15, 0, 1);
+    tu.uLush.value = spring * 0.9 + (1 - summer) * (1 - winter) * 0.2;
+    tu.uAutumn.value = autumn * 0.65;
+    const t = this.terrain!;
+    const range = t.maxHeight - t.minHeight;
+    if (theme.snowiness > 0.5 && range > 40) {
+      // permanent snow caps on high ground, reaching lower in winter
+      tu.uSnowLine.value = t.minHeight + range * (0.88 - 0.4 * winter * theme.snowiness + 0.06 * summer);
+    } else if (theme.snowiness > 0 && range > 40 && winter > 0.05) {
+      tu.uSnowLine.value = t.minHeight + range * (1.25 - 0.9 * winter * theme.snowiness);
+    } else {
+      tu.uSnowLine.value = 1e5;
+    }
+  }
+
+  render(): void {
+    const t0 = performance.now();
+    const r = this.renderer;
+    r.info.reset();
+    const sky = this.sky;
+    const s = this.settingsCache;
+    const night = this.lighting.night;
+    // subtle warm/cool grading with time of day
+    const golden = (1 - night) * (1 - smooth01(this.lighting.sunDir.y, 0.05, 0.45));
+    this.whiteBalance.setRGB(1 + 0.04 * golden - 0.03 * night, 1, 1 - 0.05 * golden + 0.05 * night);
+    const overlayK = this.overlays ? this.overlays.fade : 0;
+    this.post.render({
+      exposure: sky.exposure,
+      bloomThreshold: sky.bloomThreshold,
+      bloomStrength: 0.2 + 0.3 * night,
+      desaturate: overlayK * INFO_VIEW_DESAT,
+      sunDir: sky.keyDir,
+      cloudShadow: s && !s.clouds ? 0 : THREE.MathUtils.clamp(this.shared.uCloudCover.value * 1.2, 0, 0.55) * (1 - sky.overcast) * (1 - night) * THREE.MathUtils.smoothstep(sky.keyDir.y, 0.02, 0.2),
+      distance: this.cameraCtl.distance,
+      pitch: this.cameraCtl.effectivePitch,
+      whiteBalance: this.whiteBalance,
+      saturation: 1.06 - 0.12 * sky.overcast,
+      contrast: 1.05,
+      vignette: 0.32,
+    });
+    const now = performance.now();
+    this.stats.drawCalls = r.info.render.calls;
+    this.stats.triangles = r.info.render.triangles;
+    this.stats.frameMs = now - t0;
+    if (this.frameStart) {
+      this.fpsAcc += (now - this.frameStart) / 1000;
+      this.fpsFrames++;
+      if (this.fpsAcc >= 0.5) {
+        this.stats.fps = this.fpsFrames / this.fpsAcc;
+        this.fpsAcc = 0;
+        this.fpsFrames = 0;
+      }
+    }
+    this.frameStart = now;
+  }
+
+  pick(clientX: number, clientY: number): PickResult | null {
+    const w = this.world;
+    if (!w || !this.terrain) return null;
+    const ray = this.screenToRay(clientX, clientY);
+    const hit = pickHeightfield(w, ray, this.terrain.minHeight, this.terrain.maxHeight);
+    if (!hit) return null;
+    const cell = { x: Math.min(w.size - 1, Math.max(0, Math.floor(hit.point.x / CELL))), y: Math.min(w.size - 1, Math.max(0, Math.floor(hit.point.z / CELL))) };
+    return { cell, point: hit.point, onWater: hit.onWater };
+  }
+
   screenToRay(clientX: number, clientY: number): THREE.Ray {
     const r = this.canvas.getBoundingClientRect();
-    const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
-    const rc = new THREE.Raycaster();
-    rc.setFromCamera(ndc, this.camera);
-    return rc.ray.clone();
+    const ndc = this._ndc.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    this._rc.setFromCamera(ndc, this.camera);
+    return this._rc.ray.clone();
   }
+
   worldToScreen(v: THREE.Vector3): { x: number; y: number; visible: boolean } {
-    const p = v.clone().project(this.camera);
+    const p = this._v.copy(v).project(this.camera);
     const r = this.canvas.getBoundingClientRect();
-    return { x: r.left + ((p.x + 1) / 2) * r.width, y: r.top + ((1 - p.y) / 2) * r.height, visible: p.z < 1 && p.z > -1 };
+    const inFront = this.reversedDepth ? p.z > 0 && p.z < 1 : p.z < 1 && p.z > -1;
+    return { x: r.left + ((p.x + 1) / 2) * r.width, y: r.top + ((1 - p.y) / 2) * r.height, visible: inFront };
   }
+
   getViewInfo(): ViewInfo {
-    const f = new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse));
-    return { focusX: this.cameraCtl.focus.x, focusY: this.cameraCtl.focus.y, radiusCells: 320, cameraPos: this.camera.position, altitude: 200, frustum: f };
+    return this.viewInfo;
   }
-  setOverlay(field: FieldId | null): void { this.overlay = field; this.game.events.emit('overlay:changed', field); }
-  applySettings(_s: Settings): void {}
+
+  setOverlay(field: FieldId | null): void {
+    this.overlay = field;
+    this.overlays?.setField(field);
+    this.game.events.emit('overlay:changed', field);
+  }
+
+  applySettings(s: Settings): void {
+    const g = s.graphics;
+    const prev = this.settingsCache;
+    this.settingsCache = { ...g };
+    if (!prev || prev.fov !== g.fov) {
+      this.camera.fov = THREE.MathUtils.clamp(g.fov, 30, 100);
+      this.camera.updateProjectionMatrix();
+    }
+    this.renderRadius = THREE.MathUtils.clamp(g.renderDistance, 2, 24) * CHUNK * CELL;
+    this.sky.setShadowQuality(g.shadows);
+    this.shadowRadius = SHADOW_RADIUS_BY_QUALITY[g.shadows] || 600;
+    this.post.settings = { bloom: g.bloom, ambientOcclusion: g.ambientOcclusion, tiltShift: g.tiltShift, antialias: g.antialias && g.resolutionScale < 1.5 };
+    this.fogEnabled = g.fog;
+    this.cloudsEnabled = g.clouds;
+    this.treeDensity = THREE.MathUtils.clamp(g.treeDensity, 0.2, 1);
+    if (!prev || prev.resolutionScale !== g.resolutionScale) {
+      this.lastSize.set(-1, -1);
+      this.resize();
+    }
+  }
+
   /** capture the current frame as a data URL (optionally resized) */
-  async screenshot(_width?: number, _height?: number): Promise<string> { return this.canvas.toDataURL('image/jpeg', 0.85); }
+  async screenshot(width?: number, height?: number): Promise<string> {
+    this.render();
+    const src = this.canvas;
+    if (!width) return src.toDataURL('image/jpeg', 0.9);
+    const h = height ?? Math.round((width * src.height) / Math.max(1, src.width));
+    const c = document.createElement('canvas');
+    c.width = width;
+    c.height = h;
+    const ctx = c.getContext('2d');
+    if (!ctx) return src.toDataURL('image/jpeg', 0.9);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    // cover-fit the requested size
+    const sa = src.width / src.height, da = width / h;
+    let sw = src.width, sh = src.height, sx = 0, sy = 0;
+    if (sa > da) { sw = src.height * da; sx = (src.width - sw) / 2; } else { sh = src.width / da; sy = (src.height - sh) / 2; }
+    ctx.drawImage(src, sx, sy, sw, sh, 0, 0, width, h);
+    return c.toDataURL('image/jpeg', 0.9);
+  }
+
+  /** release every GPU resource (renderer teardown) */
+  dispose(): void {
+    this.onWorldUnloaded();
+    this.resizeObserver?.disconnect();
+    this.cameraCtl.dispose();
+    this.sky.dispose();
+    this.post.dispose();
+    this.textures.dispose();
+    this.renderer.dispose();
+  }
 }

@@ -4,7 +4,7 @@
 import { CELL, MAP_SIZES, WATER_EPS } from '../../core/constants';
 import { Noise } from '../../core/noise';
 import { RNG, hash2, hashString } from '../../core/rng';
-import type { Cell, MapSettings, OutsideConnection, ThemeDef } from '../../core/types';
+import type { Cell, GeneratedMap, MapSettings, OutsideConnection, ThemeDef } from '../../core/types';
 import { themeDef } from '../../data/themes';
 import { clampf } from './grid';
 
@@ -39,6 +39,8 @@ export interface Layout {
   startY: number;
   /** radius (cells) of the guaranteed gentle region around the start */
   buildRadius: number;
+  /** designed lake basins (cells) that start-area levelling must preserve */
+  lakes?: { x: number; y: number; r: number }[];
 }
 
 export interface GenParams {
@@ -170,5 +172,25 @@ export class GenContext {
   }
   isWet(ci: number, cellH: number): boolean {
     return this.water[ci] > cellH + WATER_EPS;
+  }
+
+  /** Package the products as a GeneratedMap (arrays are shared, not copied). */
+  result(): GeneratedMap {
+    return {
+      size: this.size,
+      heights: this.heights,
+      water: this.water,
+      seaLevel: this.seaLevel,
+      trees: this.trees,
+      fertility: this.fertility,
+      forest: this.forest,
+      ore: this.ore,
+      oil: this.oil,
+      wind: this.wind,
+      connections: this.connections,
+      highway: this.highway,
+      rail: this.rail,
+      start: { x: this.start.x, y: this.start.y },
+    };
   }
 }

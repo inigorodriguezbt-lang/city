@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>URBIS · tools sandbox</title>
+    <link rel="stylesheet" href="/src/ui/theme.css" />
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #0b1017; color: #e8eef7; font-family: Inter, system-ui, sans-serif; }
+      #view { position: fixed; inset: 0; }
+      #view canvas { display: block; width: 100%; height: 100%; }
+      #report { position: fixed; right: 12px; top: 12px; width: 360px; max-height: calc(100% - 24px); overflow: auto; font: 500 11.5px/1.45 'JetBrains Mono', ui-monospace, monospace;
+        background: rgba(12, 17, 25, 0.86); border: 1px solid rgba(255,255,255,.12); border-radius: 12px; padding: 10px 12px; backdrop-filter: blur(10px); }
+      #report h3 { margin: 0 0 6px; font: 700 13px Inter, system-ui, sans-serif; }
+      #report .ok { color: #3ddc84; } #report .bad { color: #ff5d5d; } #report .dim { color: #66758a; }
+      #report.min { max-height: 44px; overflow: hidden; }
+      #hint { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: calc(100% - 24px); font: 500 12.5px Inter, system-ui, sans-serif; color: #c9d5e6;
+        background: rgba(12,17,25,.86); border: 1px solid rgba(255,255,255,.12); border-radius: 10px; padding: 8px 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      #toasts { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; align-items: center; pointer-events: none; }
+      #toasts div { font: 600 12px Inter, system-ui, sans-serif; padding: 6px 12px; border-radius: 8px; background: rgba(12,17,25,.9); border: 1px solid rgba(255,255,255,.14); }
+    </style>
+  </head>
+  <body>
+    <div id="view"></div>
+    <div id="report"><h3>Tools sandbox</h3></div>
+    <div id="hint"></div>
+    <div id="toasts"></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

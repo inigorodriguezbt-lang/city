@@ -1,0 +1,376 @@
+// Roads + zones sandbox: a synthetic valley (hills, a river with water) and a
+// hand-built network exercising every road type, junction shape, bridges,
+// rail, tram, dead ends and slopes; zoned lots, a few buildings, districts.
+// URL params: ?t=golden|noon|dusk|night|rain|snow  &cam=<preset>  &grid=1  &districts=1  &lod=1
+import * as THREE from 'three';
+import { EventBus } from '../../src/core/EventBus';
+import type { GameEvents } from '../../src/core/events';
+import { Noise } from '../../src/core/noise';
+import { hash2 } from '../../src/core/rng';
+import { CELL, WATER_EPS } from '../../src/core/constants';
+import { Dir, RoadType, ZoneType, type MapSettings } from '../../src/core/types';
+import { World } from '../../src/world/World';
+import { RoadSurface } from '../../src/world/roadHeight';
+import { RoadRenderer } from '../../src/render/roads/RoadRenderer';
+import { ZoneRenderer } from '../../src/render/zones/ZoneRenderer';
+import type { Game } from '../../src/game/Game';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+
+const params = new URLSearchParams(location.search);
+const TIME = params.get('t') ?? 'golden';
+const CAM = params.get('cam') ?? 'overview';
+const SIZE = 96;
+
+// ── world ───────────────────────────────────────────────────────────────────
+const settings: MapSettings = {
+  cityName: 'Sandbox', mapSize: 'small', theme: 'temperate', seed: 7, style: 'european', difficulty: 'normal',
+  creative: true, disasters: false, mountains: 0.5, water: 0.5, forests: 0.3,
+};
+const world = new World(settings, SIZE);
+const noise = new Noise(11);
+const RIVER_X = 48;
+const smoothstep = (a: number, b: number, x: number) => {
+  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+};
+for (let vy = 0; vy <= SIZE; vy++)
+  for (let vx = 0; vx <= SIZE; vx++) {
+    let h = 20 + 3 * noise.noise2(vx / 30, vy / 30) + 1.2 * noise.noise2(vx / 9, vy / 9);
+    h += 16 * smoothstep(56, 92, vx) * (0.65 + 0.35 * noise.noise2(vx / 22 + 3, vy / 22));
+    h += 5 * smoothstep(60, 95, vy) * smoothstep(40, 10, vx);
+    const d = Math.abs(vx - RIVER_X);
+    h -= 12 * (1 - smoothstep(2.5, 10, d));
+    world.heights[vy * (SIZE + 1) + vx] = h;
+  }
+for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) if (Math.abs(x + 0.5 - RIVER_X) < 4.2) world.water[y * SIZE + x] = 12.2;
+
+// ── roads ───────────────────────────────────────────────────────────────────
+type Seg = [RoadType, number, number, number, number];
+const H = RoadType.Highway, A = RoadType.Avenue, S = RoadType.Street, B = RoadType.Boulevard, T = RoadType.TramAvenue;
+const P = RoadType.Pedestrian, R = RoadType.Rail, D = RoadType.Dirt;
+const segs: Seg[] = [
+  [H, 0, 6, 95, 6],
+  [S, 12, 16, 12, 84], [S, 21, 16, 21, 84],
+  [S, 4, 16, 29, 16], [S, 4, 28, 29, 28], [S, 4, 68, 29, 68], [S, 4, 78, 29, 78],
+  [T, 4, 38, 88, 38],
+  [B, 4, 58, 40, 58],
+  [S, 40, 44, 40, 84],
+  [S, 40, 70, 64, 70],
+  [P, 13, 48, 20, 48], [P, 16, 39, 16, 47], [P, 16, 49, 16, 57],
+  [A, 30, 6, 30, 88],
+  [S, 64, 39, 64, 80], [S, 64, 80, 80, 80], [S, 80, 60, 80, 79],
+  [S, 65, 50, 74, 50], [S, 65, 62, 72, 62], [S, 72, 55, 72, 61],
+  [S, 56, 7, 56, 20], [S, 56, 20, 70, 20], [S, 70, 21, 70, 30],
+  [D, 88, 39, 88, 50], [D, 89, 50, 93, 50], [D, 93, 51, 93, 72],
+  [R, 0, 90, 95, 90], [R, 70, 84, 70, 89], [R, 71, 84, 79, 84],
+  [S, 4, 17, 4, 27],
+];
+const order: RoadType[] = [R, D, S, P, B, T, A, H];
+const cellsOf = ([, x0, y0, x1, y1]: Seg): [number, number][] => {
+  const out: [number, number][] = [];
+  const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+  for (let i = 0; i <= n; i++) out.push([Math.round(x0 + ((x1 - x0) * i) / Math.max(1, n)), Math.round(y0 + ((y1 - y0) * i) / Math.max(1, n))]);
+  return out;
+};
+// grade the terrain under roads (smooth corner heights) before placing them
+const onRoad = new Uint8Array((SIZE + 1) * (SIZE + 1));
+for (const s of segs) for (const [x, y] of cellsOf(s)) for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) onRoad[(y + dy) * (SIZE + 1) + x + dx] = 1;
+for (let pass = 0; pass < 6; pass++) {
+  const src = world.heights.slice();
+  for (let vy = 0; vy <= SIZE; vy++)
+    for (let vx = 0; vx <= SIZE; vx++) {
+      const i = vy * (SIZE + 1) + vx;
+      if (!onRoad[i]) continue;
+      let sum = 0, n = 0;
+      for (let dy = -2; dy <= 2; dy++)
+        for (let dx = -2; dx <= 2; dx++) {
+          const xx = vx + dx, yy = vy + dy;
+          if (xx < 0 || yy < 0 || xx > SIZE || yy > SIZE) continue;
+          sum += src[yy * (SIZE + 1) + xx];
+          n++;
+        }
+      world.heights[i] = sum / n;
+    }
+}
+for (const t of order)
+  for (const s of segs) {
+    if (s[0] !== t) continue;
+    for (const [x, y] of cellsOf(s)) world.setRoad(x, y, t, world.isWater(x, y) ? 1 : 0);
+  }
+// bridges also over the low banks next to water so decks span the valley floor
+for (let y = 0; y < SIZE; y++)
+  for (let x = 0; x < SIZE; x++) {
+    const i = y * SIZE + x;
+    if (!world.road[i] || world.roadFlags[i] & 1) continue;
+    const wet = (xx: number) => world.isWater(xx, y);
+    if ((wet(x - 1) || wet(x + 1)) && world.cellHeight(x, y) < 14.5) world.roadFlags[i] |= 1;
+  }
+
+// ── zones, buildings, districts ───────────────────────────────────────────────
+const zoneRect = (z: ZoneType, x0: number, y0: number, x1: number, y1: number) => {
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (!world.roadAt(x, y) && !world.isWater(x, y)) world.setZone(x, y, z);
+};
+zoneRect(ZoneType.ResLow, 5, 17, 11, 27);
+zoneRect(ZoneType.ResLow, 13, 17, 20, 27);
+zoneRect(ZoneType.ResMed, 5, 29, 11, 37);
+zoneRect(ZoneType.ComLow, 13, 29, 20, 37);
+zoneRect(ZoneType.ComHigh, 22, 39, 29, 57);
+zoneRect(ZoneType.Office, 31, 39, 39, 57);
+zoneRect(ZoneType.MixedUse, 5, 59, 11, 67);
+zoneRect(ZoneType.ResHigh, 22, 59, 29, 67);
+zoneRect(ZoneType.Industry, 57, 7, 69, 19);
+zoneRect(ZoneType.ResMed, 65, 39, 74, 49);
+zoneRect(ZoneType.ResLow, 65, 51, 79, 61);
+zoneRect(ZoneType.Farming, 89, 51, 92, 70);
+const bcolors: number[] = [];
+const addB = (x: number, y: number, w: number, h: number, rot: Dir, zone: ZoneType) => {
+  for (let yy = y; yy < y + h; yy++) for (let xx = x; xx < x + w; xx++) if (world.roadAt(xx, yy) || world.bldg[world.idx(xx, yy)]) return;
+  world.addBuilding({ kind: 'zoned', defId: 'zoned:x', x, y, w, h, rot, zone, built: 1 });
+  bcolors.push(hash2(x, y));
+};
+for (let y = 17; y < 27; y += 3) { addB(9, y, 2, 2, Dir.E, ZoneType.ResLow); addB(13, y, 2, 2, Dir.W, ZoneType.ResLow); }
+for (let y = 39; y < 56; y += 4) { addB(26, y, 4, 3, Dir.E, ZoneType.ComHigh); addB(31, y + 2, 3, 3, Dir.W, ZoneType.Office); }
+addB(58, 8, 4, 4, Dir.N, ZoneType.Industry);
+addB(65, 40, 2, 2, Dir.W, ZoneType.ResMed);
+addB(66, 44, 3, 3, Dir.W, ZoneType.ResMed);
+world.districts.push({ id: 1, name: 'Old Town', color: '#ff9f43', style: null, policies: [] }, { id: 2, name: 'Riverside', color: '#54a0ff', style: null, policies: [] });
+for (let y = 10; y < 60; y++) for (let x = 0; x < 30; x++) world.setDistrict(x, y, 1);
+for (let y = 30; y < 80; y++) for (let x = 36; x < 62; x++) world.setDistrict(x, y, 2);
+
+// weather & time
+if (TIME === 'rain') world.weather = { ...world.weather, type: 'rain', intensity: 0.9 };
+if (TIME === 'snow') { world.weather = { ...world.weather, type: 'snow', intensity: 0.6, snowCover: 0.85 }; world.time.day = 20; }
+else world.time.day = 150;
+if (TIME === 'autumn') world.time.day = 290;
+
+// ── three.js scene ─────────────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(1);
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 1, 20000);
+
+interface Look { sun: [number, number]; sunCol: number; sunI: number; sky: number; ground: number; hemiI: number; bg: number; fog: number; night: number; exposure: number }
+const LOOKS: Record<string, Look> = {
+  golden: { sun: [0.2, 9], sunCol: 0xffb070, sunI: 3.2, sky: 0x9fb8d8, ground: 0x6b5a45, hemiI: 0.9, bg: 0xe9c9a4, fog: 0xe0c4a2, night: 0, exposure: 1.0 },
+  noon: { sun: [0.8, 58], sunCol: 0xfff4e6, sunI: 3.4, sky: 0xa8c8f0, ground: 0x5a6045, hemiI: 1.1, bg: 0xa9c7ea, fog: 0xbfd4ea, night: 0, exposure: 0.95 },
+  dusk: { sun: [2.6, 1.5], sunCol: 0xff8a50, sunI: 1.2, sky: 0x55648c, ground: 0x2a2530, hemiI: 0.55, bg: 0x6a6a8e, fog: 0x7a6f86, night: 0.75, exposure: 1.1 },
+  night: { sun: [3.6, 35], sunCol: 0x6f86c0, sunI: 0.22, sky: 0x1c2a48, ground: 0x0c0c10, hemiI: 0.22, bg: 0x0b1224, fog: 0x0e1628, night: 1, exposure: 1.2 },
+  rain: { sun: [1.1, 40], sunCol: 0xd8dde4, sunI: 0.9, sky: 0x9aa4b0, ground: 0x4a4c50, hemiI: 1.25, bg: 0x8e98a4, fog: 0x8d97a3, night: 0.15, exposure: 1.05 },
+  snow: { sun: [1.6, 22], sunCol: 0xe8eefa, sunI: 1.6, sky: 0xc0cfe0, ground: 0x9aa0a8, hemiI: 1.0, bg: 0xc9d4e0, fog: 0xc8d2de, night: 0, exposure: 0.9 },
+  autumn: { sun: [0.5, 25], sunCol: 0xffd9a8, sunI: 3.0, sky: 0xa8c0e0, ground: 0x6b5a45, hemiI: 1.0, bg: 0xb8cce4, fog: 0xc8d4e0, night: 0, exposure: 1.0 },
+};
+const look = LOOKS[TIME] ?? LOOKS.golden;
+renderer.toneMappingExposure = look.exposure;
+scene.background = new THREE.Color(look.bg);
+scene.fog = new THREE.Fog(look.fog, 900, 4200);
+const hemi = new THREE.HemisphereLight(look.sky, look.ground, look.hemiI);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(look.sunCol, look.sunI);
+const [az, elDeg] = look.sun;
+const el = THREE.MathUtils.degToRad(elDeg);
+const sunDir = new THREE.Vector3(Math.cos(az) * Math.cos(el), Math.sin(el), Math.sin(az) * Math.cos(el)).normalize();
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.bias = -0.0004;
+sun.shadow.normalBias = 0.6;
+scene.add(sun, sun.target);
+// environment for reflections (gradient sky)
+{
+  const envScene = new THREE.Scene();
+  const g = new THREE.SphereGeometry(100, 32, 16);
+  const col: number[] = [];
+  const top = new THREE.Color(look.sky), hor = new THREE.Color(look.bg), bot = new THREE.Color(look.ground);
+  const p = g.getAttribute('position');
+  for (let i = 0; i < p.count; i++) {
+    const y = p.getY(i) / 100;
+    const c = y > 0 ? hor.clone().lerp(top, Math.pow(y, 0.6)) : hor.clone().lerp(bot, Math.min(1, -y * 3));
+    if (TIME === 'golden' || TIME === 'dusk') {
+      const d = Math.max(0, new THREE.Vector3(p.getX(i), p.getY(i), p.getZ(i)).normalize().dot(sunDir));
+      c.lerp(new THREE.Color(look.sunCol), Math.pow(d, 8) * 0.8);
+    }
+    col.push(c.r, c.g, c.b);
+  }
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  envScene.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide })));
+  const pm = new THREE.PMREMGenerator(renderer);
+  scene.environment = pm.fromScene(envScene, 0.02).texture;
+  scene.environmentIntensity = TIME === 'night' ? 0.25 : 0.8;
+}
+
+// terrain mesh (sandbox stand-in for render-core's terrain)
+{
+  const N = SIZE + 1;
+  const pos = new Float32Array(N * N * 3), col = new Float32Array(N * N * 3);
+  const grass = new THREE.Color(world.theme.grass), dry = new THREE.Color(world.theme.grassDry), dirt = new THREE.Color(world.theme.dirt), sand = new THREE.Color(world.theme.sand);
+  const snowC = new THREE.Color(0xf0f4fa);
+  for (let vy = 0; vy < N; vy++)
+    for (let vx = 0; vx < N; vx++) {
+      const i = vy * N + vx;
+      const h = world.heights[i];
+      pos.set([vx * CELL, h, vy * CELL], i * 3);
+      const n = noise.noise2(vx / 6, vy / 6) * 0.5 + 0.5;
+      const c = grass.clone().lerp(dry, n * 0.6);
+      if (h < 13.2) c.lerp(sand, 0.8);
+      if (h < 11.5) c.lerp(dirt, 0.7);
+      if (TIME === 'snow') c.lerp(snowC, 0.85);
+      if (TIME === 'autumn') c.lerp(dry, 0.3);
+      col.set([c.r, c.g, c.b], i * 3);
+    }
+  const idx: number[] = [];
+  for (let y = 0; y < SIZE; y++)
+    for (let x = 0; x < SIZE; x++) {
+      const a = y * N + x, b = a + 1, c = a + N, d = c + 1;
+      idx.push(a, c, b, b, c, d);
+    }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 }));
+  m.receiveShadow = true;
+  scene.add(m);
+  // water
+  const wg: number[] = [];
+  for (let y = 0; y < SIZE; y++)
+    for (let x = 0; x < SIZE; x++) {
+      const lvl = world.water[y * SIZE + x];
+      if (lvl <= world.cellHeight(x, y) + WATER_EPS && !(lvl > -100 && world.cellMinMax(x, y)[0] < lvl)) continue;
+      const x0 = x * CELL, z0 = y * CELL, x1 = x0 + CELL, z1 = z0 + CELL;
+      wg.push(x0, lvl, z0, x0, lvl, z1, x1, lvl, z0, x1, lvl, z0, x0, lvl, z1, x1, lvl, z1);
+    }
+  const wgeo = new THREE.BufferGeometry();
+  wgeo.setAttribute('position', new THREE.Float32BufferAttribute(wg, 3));
+  wgeo.computeVertexNormals();
+  const wm = new THREE.Mesh(wgeo, new THREE.MeshStandardMaterial({ color: TIME === 'snow' ? 0x3f5a66 : 0x1f4f5e, roughness: 0.08, metalness: 0.2, transparent: true, opacity: 0.88 }));
+  scene.add(wm);
+  // simple buildings for context
+  const bgeo: THREE.BufferGeometry[] = [];
+  let bi = 0;
+  const palette = [0xd8cbb8, 0xc9b8a4, 0xe2dccf, 0xb9a48d, 0xa8b0b8, 0xcfc6bb];
+  for (const b of world.buildings.values()) {
+    const hsh = bcolors[bi++] ?? 0;
+    const floors = b.zone === ZoneType.ComHigh || b.zone === ZoneType.Office ? 6 + (hsh % 9) : b.zone === ZoneType.Industry ? 2 : 2 + (hsh % 2);
+    const hgt = floors * 3.3;
+    const w = b.w * CELL - 3, d = b.h * CELL - 3;
+    const box = new THREE.BoxGeometry(w, hgt, d);
+    const base = world.cellHeight(b.x + (b.w >> 1), b.y + (b.h >> 1));
+    box.translate(b.x * CELL + (b.w * CELL) / 2, base + hgt / 2 - 0.5, b.y * CELL + (b.h * CELL) / 2);
+    const c = new THREE.Color(palette[hsh % palette.length]);
+    const cc = new Float32Array(box.getAttribute('position').count * 3);
+    for (let i = 0; i < cc.length; i += 3) cc.set([c.r, c.g, c.b], i);
+    box.setAttribute('color', new THREE.BufferAttribute(cc, 3));
+    bgeo.push(box);
+  }
+  if (bgeo.length) {
+    const bm = new THREE.Mesh(mergeGeometries(bgeo)!, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8 }));
+    bm.castShadow = bm.receiveShadow = true;
+    scene.add(bm);
+  }
+}
+
+// ── fake game wiring ────────────────────────────────────────────────────────
+const events = new EventBus<GameEvents>();
+world.bus = events;
+const lighting = { sunDir, daylight: 1 - look.night, night: look.night, sunColor: new THREE.Color(look.sunCol), ambientColor: new THREE.Color(look.sky) };
+const focus = { x: 48, y: 48 };
+const fakeRenderer = {
+  scene, camera, canvas: renderer.domElement, lighting, renderer,
+  getViewInfo: () => ({ focusX: focus.x, focusY: focus.y, radiusCells: 220, cameraPos: camera.position, altitude: camera.position.y, frustum: new THREE.Frustum() }),
+};
+const game = { events, world, roadSurface: new RoadSurface(world), renderer: fakeRenderer, simDt: 0, dt: 0, time: 0, settings: { value: {} } } as unknown as Game;
+const roads = new RoadRenderer(game);
+const zones = new ZoneRenderer(game);
+roads.onWorldLoaded(world);
+zones.onWorldLoaded(world);
+if (params.get('grid') === '1') zones.setGridVisible(true);
+if (params.get('districts') === '1') zones.setDistrictsVisible(true);
+world.flushChanges();
+
+// ── camera presets ──────────────────────────────────────────────────────────
+const C = (x: number, y: number) => new THREE.Vector3(x * CELL, world.cellHeight(Math.floor(x), Math.floor(y)), y * CELL);
+const views: Record<string, [THREE.Vector3, number, number, number]> = {
+  // target, distance, azimuth (deg, 0 = from +Z/south), elevation deg
+  overview: [C(48, 50), 1500, 20, 42],
+  junction: [C(30.5, 58.5), 95, 35, 40],
+  signals: [C(30.5, 38.5), 70, 150, 30],
+  bridge: [C(48, 40), 230, 70, 22],
+  bridge2: [C(47, 70.5), 120, 200, 18],
+  rail: [C(70, 88), 170, 30, 38],
+  ped: [C(16.5, 48.5), 75, 20, 45],
+  east: [C(72, 60), 320, 15, 45],
+  highway: [C(30, 6.5), 150, 150, 32],
+  street: [C(12.5, 22), 60, 60, 30],
+  cul: [C(74, 50.5), 70, 210, 45],
+  dirt: [C(91, 55), 160, 250, 40],
+  top: [C(30.5, 58.5), 140, 0, 89],
+  tram: [C(22, 38.5), 60, 30, 25],
+  curve: [C(64, 80), 90, 330, 40],
+};
+const [tgt, dist, azd, eld] = views[CAM] ?? views.overview;
+const azr = THREE.MathUtils.degToRad(azd), elr = THREE.MathUtils.degToRad(eld);
+camera.position.set(tgt.x + dist * Math.sin(azr) * Math.cos(elr), tgt.y + dist * Math.sin(elr), tgt.z + dist * Math.cos(azr) * Math.cos(elr));
+camera.lookAt(tgt);
+focus.x = tgt.x / CELL;
+focus.y = tgt.z / CELL;
+const shadowR = Math.min(900, dist * 1.6 + 60);
+sun.position.copy(tgt).addScaledVector(sunDir, 1500);
+sun.target.position.copy(tgt);
+sun.shadow.camera.left = -shadowR;
+sun.shadow.camera.right = shadowR;
+sun.shadow.camera.top = shadowR;
+sun.shadow.camera.bottom = -shadowR;
+sun.shadow.camera.near = 10;
+sun.shadow.camera.far = 3500;
+sun.shadow.camera.updateProjectionMatrix();
+
+// ── UI ─────────────────────────────────────────────────────────────────────
+const ui = document.getElementById('ui')!;
+const link = (label: string, p: Record<string, string>) => {
+  const b = document.createElement('button');
+  b.textContent = label;
+  b.onclick = () => {
+    const q = new URLSearchParams(location.search);
+    for (const [k, v] of Object.entries(p)) q.set(k, v);
+    location.search = q.toString();
+  };
+  ui.appendChild(b);
+};
+for (const t of Object.keys(LOOKS)) link(t, { t });
+for (const v of Object.keys(views)) link(v, { cam: v });
+link('grid', { grid: params.get('grid') === '1' ? '0' : '1' });
+link('districts', { districts: params.get('districts') === '1' ? '0' : '1' });
+const stats = document.getElementById('stats')!;
+
+// ── loop ───────────────────────────────────────────────────────────────────
+let last = performance.now();
+let frames = 0;
+(window as unknown as { __ready: boolean }).__ready = false;
+let settle = 0;
+function frame() {
+  // SwiftShader is slow: once everything is built, render a couple of frames and stop
+  if ((window as unknown as { __ready: boolean }).__ready && ++settle > 3 && !params.get('live')) return;
+  requestAnimationFrame(frame);
+  const now = performance.now();
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  (game as unknown as { simDt: number; dt: number }).simDt = dt;
+  roads.budgetMs = 60;
+  world.flushChanges();
+  roads.update(dt);
+  zones.update(dt);
+  renderer.render(scene, camera);
+  frames++;
+  if (frames % 10 === 0 || roads.stats.pending === 0) {
+    stats.textContent = `roads: chunks ${roads.stats.chunks} tris ${roads.stats.triangles} pending ${roads.stats.pending} build ${roads.stats.lastBuildMs.toFixed(1)}ms  draws ${renderer.info.render.calls}`;
+  }
+  if (roads.stats.pending === 0 && frames > 3) (window as unknown as { __ready: boolean }).__ready = true;
+}
+frame();
+(window as unknown as Record<string, unknown>).__sb = { world, roads, zones, scene, camera, renderer };

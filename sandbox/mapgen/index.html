@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>URBIS · map generator sandbox</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #141a24; color: #dde6f0; font-family: Inter, system-ui, sans-serif; }
+      body { display: flex; }
+      #panel { width: 250px; flex: none; padding: 12px; box-sizing: border-box; background: #1b2330; border-right: 1px solid #2c3848; overflow-y: auto; font-size: 12px; }
+      #panel h1 { font-size: 15px; margin: 0 0 10px; letter-spacing: 0.04em; }
+      #panel label { display: block; margin: 7px 0 2px; color: #9fb0c4; }
+      #panel select, #panel input[type='number'], #panel button { width: 100%; box-sizing: border-box; background: #111821; color: #e8eef5; border: 1px solid #3b4a5e; border-radius: 5px; padding: 5px 6px; font-size: 12px; }
+      #panel input[type='range'] { width: 100%; }
+      #panel button { cursor: pointer; margin-top: 8px; background: #2a5c8a; border-color: #3d7ab3; }
+      #panel button.alt { background: #26303e; border-color: #3b4a5e; }
+      .row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+      .row label { display: inline-flex; align-items: center; gap: 3px; margin: 0; color: #cdd8e4; }
+      .layers button { width: auto; flex: 1 1 30%; margin-top: 4px; padding: 4px 2px; background: #26303e; }
+      .layers button.on { background: #3d7ab3; }
+      #main { flex: 1; position: relative; overflow: auto; display: flex; align-items: flex-start; justify-content: center; }
+      #view { margin: 10px; image-rendering: pixelated; box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5); }
+      #gl { position: absolute; inset: 0; display: none; }
+      #gallery { display: none; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 8px; width: 100%; box-sizing: border-box; }
+      #gallery figure { margin: 0; background: #1b2330; border-radius: 6px; overflow: hidden; }
+      #gallery canvas { width: 100%; display: block; image-rendering: pixelated; }
+      #gallery figcaption { padding: 4px 8px; font: 11px/1.35 ui-monospace, monospace; color: #b8c7d8; }
+      #gallery figcaption b { color: #fff; font: 600 12px Inter, system-ui, sans-serif; }
+      #status { margin-top: 10px; font: 11px/1.4 ui-monospace, monospace; color: #9fe0b0; white-space: pre-wrap; }
+      #bar { height: 4px; background: #2c3848; border-radius: 2px; margin-top: 8px; overflow: hidden; }
+      #bar div { height: 100%; width: 0; background: #5fb0ff; transition: width 0.1s; }
+    </style>
+  </head>
+  <body>
+    <div id="panel">
+      <h1>URBIS · mapgen</h1>
+      <label>Theme</label>
+      <select id="theme"></select>
+      <label>Size</label>
+      <select id="size"><option>small</option><option selected>medium</option><option>large</option><option>huge</option></select>
+      <label>Seed</label>
+      <input id="seed" type="number" value="42" />
+      <label>Mountains <span id="mv"></span></label>
+      <input id="mountains" type="range" min="0" max="1" step="0.05" value="0.5" />
+      <label>Water <span id="wv"></span></label>
+      <input id="water" type="range" min="0" max="1" step="0.05" value="0.5" />
+      <label>Forests <span id="fv"></span></label>
+      <input id="forests" type="range" min="0" max="1" step="0.05" value="0.5" />
+      <button id="gen">Generate</button>
+      <button id="rand" class="alt">Random seed</button>
+      <button id="gal" class="alt">Gallery (all themes)</button>
+      <button id="three" class="alt">3D view</button>
+      <label>Layer</label>
+      <div class="row layers" id="layers"></div>
+      <div class="row">
+        <label><input type="checkbox" id="cTrees" checked /> trees</label>
+        <label><input type="checkbox" id="cRoutes" checked /> routes</label>
+        <label><input type="checkbox" id="cWater" checked /> water</label>
+      </div>
+      <div id="bar"><div></div></div>
+      <div id="status"></div>
+    </div>
+    <div id="main">
+      <canvas id="view"></canvas>
+      <div id="gallery"></div>
+      <div id="gl"></div>
+    </div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

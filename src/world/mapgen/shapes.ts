@@ -60,7 +60,7 @@ function warp(k: Kit, mx: number, my: number, L: number, A: number): [number, nu
 
 /** Coastline position v_c(u) in canonical space. */
 function coastline(k: Kit, u: number, c0: number, a1: number, a2: number): number {
-  return c0 + a1 * k.nCoast.fbm2(u * 2.2, 3.7, 3) + a2 * k.nCoast.fbm2(u * 7.5, 9.1, 2);
+  return c0 + a1 * k.nCoast.fbm2(u * 2.2, 3.7, 3) + a2 * k.nCoast.fbm2(u * 7.5, 9.1, 2) + a2 * 0.35 * k.nCoast.noise2(u * 23, 17.3);
 }
 
 /** Smooth seabed profile for a point `off` meters offshore (continuous with 0 at the shoreline). */
@@ -84,7 +84,7 @@ function temperate(k: Kit): ThemeResult {
   const u0 = rng.range(0.25, 0.75);
   const u1 = clampf(u0 + rng.range(-0.25, 0.25), 0.22, 0.78);
   const bayAmp = 0.03 * (0.6 + water);
-  const coast = (u: number) => coastline(k, u, c0, 0.045, 0.016) - bayAmp * Math.exp(-(((u - u1) / 0.07) ** 2));
+  const coast = (u: number) => coastline(k, u, c0, 0.1, 0.04) - bayAmp * Math.exp(-(((u - u1) / 0.07) ** 2));
   const mouthV = coast(u1) + 0.05;
   const river = designPath(k, 'river', u0, -0.03, u1, mouthV, { wavelength: 1500 + 700 * rng.next(), amplitude: 0.9, step: 12, wander: 0.3 }, 0);
   const rf = pathField([river], V);
@@ -106,7 +106,7 @@ function temperate(k: Kit): ThemeResult {
         const hills = (14 + 30 * relief) * sstep(0, 1300, d) * k.nBase.fbm2(wmx / 1900, wmy / 1900, 5);
         const hl = sstep(0.05, 0.6, k.nMask.fbm2(mx / 7000, my / 7000, 2) * 0.9 + (0.5 - cv) * 1.3) * sstep(700, 2600, d);
         const highland = hl * relief * (100 * k.nRidge.ridged2(wmx / 2700, wmy / 2700, 5) + 22 * k.nBase.fbm2(wmx / 1100 + 7, wmy / 1100, 3));
-        z = base + hills + highland + 0.9 * sstep(0, 70, d);
+        z = base + hills + highland + 1.2 * sstep(0, 45, d) + 2.2 * sstep(20, 140, d);
       } else {
         z = seabed(-d, 30, 1000) + 1.5 * k.nDetail.fbm2(mx / 700, my / 700, 2) * sstep(0, 300, -d);
       }
@@ -115,7 +115,7 @@ function temperate(k: Kit): ThemeResult {
       const dv = rf.dist[i] * CELL;
       if (dv < floodHalf + sideW) {
         const s = rf.s[i];
-        const floor = entryFloor * Math.pow(1 - s, 1.25) + 0.9 + 1.2 * k.nDetail.fbm2(mx / 900, my / 900, 2) * (1 - s);
+        const floor = entryFloor * Math.pow(1 - s, 1.25) + 2.6 + 1.2 * k.nDetail.fbm2(mx / 900, my / 900, 2) * (1 - s);
         const t = sstep(floodHalf + sideW, floodHalf, dv);
         if (floor < z) z = mix(z, floor, t);
       }
@@ -156,7 +156,7 @@ function mediterranean(k: Kit): ThemeResult {
   const seaFrac = 0.15 + 0.1 * water;
   const c0 = 1 - seaFrac;
   const ub = rng.range(0.38, 0.62);
-  const coast = (u: number) => coastline(k, u, c0, 0.06, 0.022);
+  const coast = (u: number) => coastline(k, u, c0, 0.1, 0.045);
   const vb = coast(ub) - 0.01;
   const Rb = 0.15 + 0.07 * water;
   const apexU = ub, apexV = vb - Rb;
@@ -190,7 +190,7 @@ function mediterranean(k: Kit): ThemeResult {
         const ridge = k.nRidge.ridged2(wmx / 2300, wmy / 2300, 5);
         const hills = (40 + 80 * relief) * sstep(250, 2600, d) * (0.7 * ridge + 0.3 * (k.nBase.fbm2(wmx / 1500, wmy / 1500, 4) + 0.4));
         const rolling = (5 + 9 * relief) * k.nBase.fbm2(wmx / 800 + 3, wmy / 800, 3) * sstep(0, 450, d);
-        z = base + cliff + hills + rolling + 0.7 * sstep(0, 60, d);
+        z = base + cliff + hills + rolling + 1.1 * sstep(0, 40, d) + 1.8 * sstep(15, 120, d);
       } else {
         const off = -d;
         z = seabed(off, 34 + 8 * head, 650 - 250 * head) + 1.2 * k.nDetail.fbm2(mx / 600, my / 600, 2) * sstep(0, 250, off);
@@ -199,7 +199,7 @@ function mediterranean(k: Kit): ThemeResult {
       const dv = rf.dist[i] * CELL;
       if (dv < floodHalf + sideW) {
         const s = rf.s[i];
-        const floor = entryFloor * Math.pow(1 - s, 1.35) + 0.8;
+        const floor = entryFloor * Math.pow(1 - s, 1.35) + 2.2;
         const t = sstep(floodHalf + sideW, floodHalf, dv);
         if (floor < z) z = mix(z, floor, t);
       }
@@ -231,7 +231,7 @@ function boreal(k: Kit): ThemeResult {
   const { water, relief } = ctx.params;
   const seaFrac = 0.08 + 0.07 * water;
   const c0 = 1 - seaFrac;
-  const coast = (u: number) => coastline(k, u, c0, 0.05, 0.02);
+  const coast = (u: number) => coastline(k, u, c0, 0.08, 0.04);
   const nF = Math.max(2, Math.min(k.size >= 384 ? 4 : 3, 2 + Math.round(2 * water + rng.range(-0.4, 0.4))));
   const fjords: DesignedPath[] = [];
   const heads: [number, number][] = [];
@@ -269,8 +269,8 @@ function boreal(k: Kit): ThemeResult {
         const ridge = k.nRidge.ridged2(wmx / 2100, wmy / 2100, 5);
         const knolls = relief * (46 * billow + 60 * ridge) * sstep(0, 900, d);
         // glacial scour basins → lakes
-        const pit = sstep(0.1, 0.42, k.nMask.fbm2(wmx / 1350 + 5, wmy / 1350 - 3, 3)) * (5 + 13 * water) * sstep(0, 500, d);
-        z = base + knolls - pit + 0.8 * sstep(0, 60, d);
+        const pit = sstep(0.16, 0.44, k.nMask.fbm2((cu * M + wx) / 520 + 5, (cv * M + wy) / 1250 - 3, 4)) * (4 + 10 * water) * sstep(0, 500, d);
+        z = base + knolls - pit + 1.0 * sstep(0, 40, d) + 1.5 * sstep(10, 100, d);
       } else {
         const off = -d;
         // skerries: small rocky islets poking out near the shore
@@ -395,6 +395,7 @@ function desert(k: Kit): ThemeResult {
       startX,
       startY,
       buildRadius,
+      lakes: [{ x: lx, y: ly, r: lakeR * 1.45 }],
     },
     flatten: 0.75,
   };
@@ -450,15 +451,15 @@ function tropical(k: Kit): ThemeResult {
         let zi: number;
         if (dm < 0) {
           const inl = -dm;
-          const plain = 2.2 * sstep(0, 90, inl) + 16 * (1 - Math.exp(-inl / 1400));
+          const plain = 2.2 * sstep(0, 90, inl) + 16 * (1 - Math.exp(-inl / 1400)) + (3 + 5 * relief) * k.nDetail.fbm2(wmx / 520, wmy / 520, 4) * sstep(60, 500, inl);
           const hills = is.hills * (16 + 38 * relief) * sstep(150, 1400, inl) * (0.55 + k.nBase.fbm2(wmx / 1300, wmy / 1300, 5));
           zi = plain + Math.max(0, hills);
           if (n === 0) {
             const dvx = (wu - volU) * M, dvy = (wv - volV) * M;
             const dv = Math.hypot(dvx, dvy);
             if (dv < volR) {
-              const pa = Math.atan2(dvy, dvx);
-              const gully = 1 - 0.18 * k.nRidge.ridged2(Math.cos(pa) * 3.2 + dv / 900, Math.sin(pa) * 3.2, 3);
+              const pa = Math.atan2(dvy, dvx) + 0.45 * k.nWarp.fbm2(dvx / 700, dvy / 700, 3);
+              const gully = 1 - (0.1 + 0.12 * sstep(0.1, 0.8, dv / volR)) * k.nRidge.ridged2(Math.cos(pa) * 2.6 + dv / 1100, Math.sin(pa) * 2.6, 4);
               let cone = volH * Math.pow(1 - dv / volR, 1.75) * gully;
               if (dv < craterR * 1.6) cone -= (38 + 10 * relief) * sstep(craterR * 1.6, craterR * 0.4, dv);
               zi = Math.max(zi, plain + cone);
@@ -522,10 +523,10 @@ function alpine(k: Kit): ThemeResult {
     sides.push(makePath('valley', chaikin(cells, 2)));
   }
   const sf = pathField(sides, V);
-  const floorHalf = (0.1 + 0.035 * (1 - mountains)) * M;
+  const floorHalf = (0.118 + 0.04 * (1 - mountains)) * M;
   const sideW = 0.15 * M;
   const sLake = rng.range(0.32, 0.6);
-  const lakeLen = ((0.12 + 0.14 * water) * M) / CELL / valley.length; // normalised
+  const lakeLen = ((0.2 + 0.16 * water) * M) / CELL / valley.length; // normalised
   const lakeDepth = 14 + 12 * water;
   valley.lakeSpans.push([sLake - lakeLen * 0.5, sLake + lakeLen * 0.5 + 0.015]);
   const floorAt = (s: number) => 36 + 30 * (1 - s);
@@ -554,18 +555,24 @@ function alpine(k: Kit): ThemeResult {
         if (f2 < z) z = mix(z, f2, t);
       }
       // glacial lake basin in the valley floor
-      const ls = (s - (sLake - lakeLen * 0.5)) / lakeLen;
-      if (ls > -0.1 && ls < 1.1) {
-        const along = sstep(-0.05, 0.22, ls) * (1 - sstep(0.8, 1.02, ls));
-        const across = sstep(floorHalf * 0.85, floorHalf * 0.3, dv);
-        z -= lakeDepth * along * across;
+      const la = (s - sLake) / (lakeLen * 0.5);
+      if (la > -1.4 && la < 1.4) {
+        // elongated basin following the valley; asymmetric (deeper toward the up-valley end)
+        const lb = dv / (floorHalf * 0.62);
+        const e = Math.sqrt(la * la + lb * lb) * (1 + 0.16 * k.nDetail.fbm2(mx / 420, my / 420, 3));
+        z -= lakeDepth * sstep(1.08, 0.25, e) * (1 - 0.3 * sstep(-1, 1, la));
       }
       // tarns in high cirques
-      const tarn = sstep(0.34, 0.52, k.nMask.fbm2(wmx / 700, wmy / 700, 3)) * sstep(200, 250, z) * (6 + 6 * water);
+      const tarn = sstep(0.4, 0.56, k.nMask.fbm2(wmx / 420, wmy / 420, 3)) * sstep(200, 250, z) * (4 + 5 * water);
       z -= tarn;
       h[i] = z;
     }
     if ((vy & 31) === 0) ctx.report(vy / V);
+  }
+  const lakes: { x: number; y: number; r: number }[] = [];
+  for (let q = 0; q <= 6; q++) {
+    const [qx, qy] = pointAt(valley, sLake - lakeLen * 0.5 + (lakeLen * q) / 6);
+    lakes.push({ x: qx, y: qy, r: (floorHalf * 0.7) / CELL });
   }
   const sStart = clampf(sLake + lakeLen * 0.5 + rng.range(0.05, 0.12), 0.15, 0.9);
   const [px, py] = pointAt(valley, sStart);
@@ -581,6 +588,7 @@ function alpine(k: Kit): ThemeResult {
       startX: px - ty * off * side,
       startY: py + tx * off * side,
       buildRadius: Math.max(36, k.size * 0.15),
+      lakes,
     },
     flatten: 0.55,
   };
@@ -593,20 +601,23 @@ function alpine(k: Kit): ThemeResult {
  */
 export function flattenRegion(ctx: GenContext, cx: number, cy: number, radius: number, strength: number, seaLevel: number | null): void {
   const V = ctx.V, h = ctx.heights;
-  const low = blur(h, V, V, Math.max(6, radius * 0.18));
+  const low = blur(h, V, V, Math.max(5, radius * 0.12));
   const n = ctx.noise('flatten-edge');
+  const lakes = ctx.layout.lakes ?? [];
   const r0 = radius * 0.55, r1 = radius * 1.08;
   const x0 = Math.max(0, Math.floor(cx - r1 * 1.3)), x1 = Math.min(V - 1, Math.ceil(cx + r1 * 1.3));
   const y0 = Math.max(0, Math.floor(cy - r1 * 1.3)), y1 = Math.min(V - 1, Math.ceil(cy + r1 * 1.3));
   for (let y = y0; y <= y1; y++) {
     for (let x = x0; x <= x1; x++) {
       const d = Math.hypot(x - cx, y - cy) * (1 + 0.22 * n.fbm2(x / 60, y / 60, 3));
-      const m = sstep(r1, r0, d) * strength;
+      let m = sstep(r1, r0, d) * strength;
+      for (const lk of lakes) m *= 1 - sstep(lk.r * 1.3, lk.r * 0.95, Math.hypot(x - lk.x, y - lk.y));
       if (m <= 0) continue;
       const i = y * V + x;
       const z = h[i];
       // flatten toward the low-passed surface, itself tilted gently
-      let nz = low[i] + (z - low[i]) * (1 - m);
+      const und = 0.9 * n.fbm2(x / 26 + 40, y / 26, 3) + 0.35 * n.noise2(x / 8 - 13, y / 8);
+      let nz = low[i] + (z - low[i]) * (1 - m) + und * m;
       if (seaLevel !== null && z >= seaLevel + 0.5 && nz < seaLevel + 1.2) nz = Math.min(z, seaLevel + 1.2);
       h[i] = nz;
     }

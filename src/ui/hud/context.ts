@@ -22,6 +22,8 @@ export interface HudContext {
   inGame(): boolean;
   /** true on narrow (phone) layouts where panels become bottom sheets */
   compact(): boolean;
+  /** move the camera to a cell (fractional ok) */
+  flyTo(x: number, y: number, distance?: number, instant?: boolean): void;
 }
 
 /** Persisted per-city HUD state (lives in world.ext['ui-hud']). */
@@ -92,7 +94,8 @@ export function prettyKey(k: string): string {
 }
 
 /** Human-friendly label for money-flow categories recorded by world.spend/earn. */
-export function flowLabel(k: string): string {
+export function flowLabel(k: string, expense = false): string {
+  if (expense && (k === 'transit' || k === 'tourism')) return k === 'transit' ? 'Public transport' : 'Tourism promotion';
   const map: Record<string, string> = {
     resLow: 'Residential (low)', resHigh: 'Residential (high)', comLow: 'Commercial (low)', comHigh: 'Commercial (high)',
     office: 'Offices', industry: 'Industry', tourism: 'Tourism', transit: 'Transit fares', exports: 'Exports',

@@ -1,22 +1,37 @@
-// STUB — owned by the "mapgen" agent. Public API is FROZEN.
+// ─────────────────────────────────────────────────────────────────────────────
+// Map generator entry point. Public API is FROZEN: generateMap(settings,
+// onProgress) → GeneratedMap.
+//
+// The heavy work runs in a dedicated Web Worker (inlined so the single-file
+// build works); progress labels are streamed back ("Shaping continents",
+// "Eroding mountains", "Carving rivers", …), typed arrays are transferred (no
+// copies) and the worker is terminated afterwards. Output is deterministic for
+// the same settings + seed. If workers are unavailable (very old browsers,
+// restrictive CSP) the same pipeline runs on the main thread.
+// ─────────────────────────────────────────────────────────────────────────────
 import type { GeneratedMap, MapSettings } from '../../core/types';
-import { MAP_SIZES } from '../../core/constants';
+import { WorkerRPC } from '../../core/rpc';
+import MapgenWorker from '../../workers/mapgen.worker?worker&inline';
 
 /** Generate a map in a Web Worker. onProgress(0..1, label). */
 export async function generateMap(settings: MapSettings, onProgress?: (p: number, label: string) => void): Promise<GeneratedMap> {
-  const size = MAP_SIZES[settings.mapSize];
-  onProgress?.(1, 'flat stub map');
-  const n = size * size;
-  return {
-    size,
-    heights: new Float32Array((size + 1) * (size + 1)).fill(10),
-    water: new Float32Array(n).fill(-1e4),
-    seaLevel: 0,
-    trees: new Uint8Array(n),
-    fertility: new Uint8Array(n), forest: new Uint8Array(n), ore: new Uint8Array(n), oil: new Uint8Array(n), wind: new Uint8Array(n),
-    connections: [],
-    highway: [],
-    rail: [],
-    start: { x: size >> 1, y: size >> 1 },
-  };
+  // structured-clone-safe copy of the settings (strip anything non-plain)
+  const args: MapSettings = JSON.parse(JSON.stringify(settings));
+  let rpc: WorkerRPC | null = null;
+  try {
+    rpc = new WorkerRPC(new MapgenWorker());
+  } catch (err) {
+    console.warn('[mapgen] worker unavailable, generating on the main thread', err);
+  }
+  if (rpc) {
+    try {
+      return await rpc.call<GeneratedMap>('generate', args, [], (p, msg) => onProgress?.(p, msg ?? ''));
+    } finally {
+      rpc.terminate();
+    }
+  }
+  const { runPipeline } = await import('./pipeline');
+  // yield once so the loading screen can paint before the synchronous run
+  await new Promise((r) => setTimeout(r, 0));
+  return runPipeline(args, onProgress);
 }

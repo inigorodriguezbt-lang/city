@@ -7,6 +7,7 @@ import { formatMoney, formatNumber } from '../../core/util';
 import { BUILDINGS, CATEGORY_INFO } from '../../data/buildings';
 import { MILESTONES } from '../../data/milestones';
 import { OVERLAYS } from '../../data/overlays';
+import { styleDef } from '../../data/styles';
 import { ROADS } from '../../data/roads';
 import { ZONES } from '../../data/zones';
 import type { World } from '../../world/World';
@@ -436,7 +437,7 @@ function transitLineItems(): PaletteItem[] {
     name: m.name,
     icon: m.icon,
     description: m.description,
-    costText: 'Stops free · vehicles paid',
+    costText: 'Free to draw',
     unlock: m.unlock,
     chips: [{ icon: '👥', text: m.capacity.replace(' passengers', ' pax') }],
     rows: [['Vehicle capacity', m.capacity], ['Earns', 'Ticket fares every month', 'good']],
@@ -466,7 +467,7 @@ function districtItems(world: World | null, actions: CatalogActions): PaletteIte
   for (const d of world?.districts ?? []) {
     items.push({
       key: `district:${d.id}`, kind: 'district', name: d.name, icon: '🖌️', description: `Paint cells into ${d.name}.`,
-      costText: 'Free', unlock: 4, chips: [{ icon: '●', text: d.style ? d.style : 'City style' }], rows: [['Policies', String(d.policies.length)]], notes: ['Drag to paint · [ ] brush size'],
+      costText: 'Free', unlock: 4, chips: [{ icon: '●', text: d.style ? styleDef(d.style).name : 'City style' }], rows: [['Policies', String(d.policies.length)]], notes: ['Drag to paint · [ ] brush size'],
       color: d.color, tool: 'district', opts: { districtId: d.id }, matchKeys: ['districtId'], search: `district paint ${d.name}`, cat: 'districts',
     });
   }

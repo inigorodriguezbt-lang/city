@@ -36,7 +36,7 @@ export interface RoadCheck {
 }
 
 /** Per-cell verdict of a road analysis (index-aligned with `cells`). */
-export const enum RoadCellState {
+export enum RoadCellState {
   New = 0,
   /** same type already there (free) */
   Existing = 1,
@@ -75,6 +75,10 @@ export interface BuildingCheck extends PlacementCheck {
   ground: number;
   /** true when the front side touches a usable road */
   frontage: boolean;
+  /** the site itself is fine (only money may be missing) */
+  siteOk: boolean;
+  /** the player can pay for it (always true for free moves / creative) */
+  affordable: boolean;
 }
 
 export interface BulldozePreview {
@@ -100,6 +104,8 @@ export interface BulldozeFilter {
 // ── tuning ──────────────────────────────────────────────────────────────────
 const BRIDGE_COST_MULT = 3;
 const MAX_BRIDGE_SPAN = 64;
+/** steep bank cells a bridge may extend over on each side */
+const MAX_ABUTMENT = 2;
 /** max cut / fill depth when grading a road (m) */
 const MAX_GRADE = 12;
 /** road profile step limit between neighbouring cells (m) */
@@ -108,6 +114,8 @@ const RESOURCE_THRESHOLD = 60;
 const RUBBLE_COST_PER_CELL = 60;
 const TERRAFORM_COST_PER_M3 = 0.05;
 const TREE_COST = 12;
+/** 'level' terraform target above sea level (m) */
+const LEVEL_ABOVE_SEA = 1.2;
 const ZONED_VALUE_PER_CELL = 600;
 
 const ok = (cost = 0, id?: number): ActionResult => (id === undefined ? { ok: true, cost } : { ok: true, cost, id });
@@ -634,7 +642,7 @@ export class WorldActions {
     const n = cells.length;
     const state = (res.state = new Uint8Array(n));
     const bridge = (res.bridge = new Uint8Array(n));
-    const surface = (res.surface = new Float32Array(n));
+    res.surface = new Float32Array(n);
     const reasons = new Map<string, number>();
     const bad = (k: number, why: string) => {
       if (state[k] !== RoadCellState.Invalid) res.invalid.push(cells[k]);
@@ -715,7 +723,17 @@ export class WorldActions {
 
     res.replaces = [...replaces];
     // terrain grading along the path (only new land cells are regraded)
-    this.gradeRoad(w, res, replaces);
+    let steep = this.gradeRoad(w, res, replaces);
+    // steep banks next to a bridge become part of it (abutments / short viaducts)
+    if (steep.length && type !== RoadType.Dirt && this.extendBridges(res, steep, def.cost)) {
+      res.grading.clear();
+      steep = this.gradeRoad(w, res, replaces);
+    }
+    for (const k of steep) {
+      res.invalid.push(cells[k]);
+      state[k] = RoadCellState.Invalid;
+    }
+    if (steep.length) reasons.set('Too steep for a road', (reasons.get('Too steep for a road') ?? 0) + steep.length);
 
     let newCells = 0;
     for (let k = 0; k < n; k++) if (state[k] === RoadCellState.New || state[k] === RoadCellState.Upgrade) newCells++;
@@ -739,6 +757,38 @@ export class WorldActions {
     return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) === 1;
   }
 
+  /**
+   * Turn steep new land cells that directly continue a bridge run (in path
+   * order) into bridge cells — at most MAX_ABUTMENT per side. Returns true
+   * when something changed (grading must then be recomputed).
+   */
+  private extendBridges(res: RoadAnalysis, steep: number[], cellCost: number): boolean {
+    const { cells, state, bridge } = res;
+    const n = cells.length;
+    const isSteep = new Uint8Array(n);
+    for (const k of steep) isSteep[k] = 1;
+    const convert: number[] = [];
+    for (let k = 0; k < n; k++) {
+      if (!bridge[k]) continue;
+      for (const dir of [-1, 1]) {
+        let j = k + dir, count = 0;
+        while (j >= 0 && j < n && count < MAX_ABUTMENT && isSteep[j] && !bridge[j] && state[j] === RoadCellState.New && this.adjacent(cells[j], cells[j - dir])) {
+          convert.push(j);
+          isSteep[j] = 0;
+          count++;
+          j += dir;
+        }
+      }
+    }
+    if (!convert.length) return false;
+    for (const j of convert) {
+      bridge[j] = 1;
+      res.bridges.push(cells[j]);
+      res.cost += cellCost * (BRIDGE_COST_MULT - 1);
+    }
+    return true;
+  }
+
   /** is vertex (vx,vy) locked for road grading? */
   private gradePinned(w: World, vx: number, vy: number, gradable: Set<number>, replaces: Set<number>): boolean {
     for (let cy = vy - 1; cy <= vy; cy++)
@@ -756,9 +806,9 @@ export class WorldActions {
   /**
    * Smooth the path's height profile with a slope limit and derive vertex
    * targets. Existing roads, buildings and shorelines are never regraded.
-   * Marks cells that remain too steep as invalid.
+   * Returns the path indices of new land cells that remain too steep.
    */
-  private gradeRoad(w: World, res: RoadAnalysis, replaces: Set<number>): void {
+  private gradeRoad(w: World, res: RoadAnalysis, replaces: Set<number>): number[] {
     const { cells, state, bridge, surface } = res;
     const n = cells.length;
     const s1 = w.size + 1;
@@ -832,7 +882,7 @@ export class WorldActions {
     }
     // slope check on the graded result + planned surface heights
     const hAt = (v: number) => grading.get(v) ?? w.heights[v];
-    const steepWhy = 'Too steep for a road';
+    const steep: number[] = [];
     for (let j = 0; j < n; j++) {
       const c = cells[j];
       if (!w.inBounds(c.x, c.y)) continue;
@@ -841,11 +891,7 @@ export class WorldActions {
       surface[j] = (a + b + cc + d) * 0.25;
       if (state[j] !== RoadCellState.New || bridge[j]) continue;
       const slope = (Math.max(a, b, cc, d) - Math.min(a, b, cc, d)) / CELL;
-      if (slope > MAX_ROAD_SLOPE + 1e-3) {
-        res.invalid.push(c);
-        state[j] = RoadCellState.Invalid;
-        if (!res.reason) res.reason = steepWhy;
-      }
+      if (slope > MAX_ROAD_SLOPE + 1e-3) steep.push(j);
     }
     // bridge decks for previews: interpolate between the banks, keep clearance
     for (let j = 0; j < n; ) {
@@ -897,6 +943,7 @@ export class WorldActions {
         grading.set(v, w.heights[v] + dh);
       }
     }
+    return steep;
   }
 
   placeRoad(path: Cell[], type: RoadType, opts: { replace?: boolean } = {}): ActionResult {
@@ -1173,7 +1220,7 @@ export class WorldActions {
     const fp = def ? footprintAt(def, x, y, rot) : { x, y, w: 1, h: 1 };
     const res: BuildingCheck = {
       ok: false, cost: def && !opts.free ? def.cost : 0, x: fp.x, y: fp.y, w: fp.w, h: fp.h, rot,
-      replaces: [], blocked: [], ground: 0, frontage: false,
+      replaces: [], blocked: [], ground: 0, frontage: false, siteOk: false, affordable: true,
     };
     if (!w) return { ...res, reason: 'No city loaded' };
     if (!def) return { ...res, reason: 'Unknown building' };
@@ -1235,7 +1282,9 @@ export class WorldActions {
       const avg = resSum / (fp.w * fp.h);
       if (avg <= RESOURCE_THRESHOLD) add(`Needs ${RESOURCE_NAMES[pl.resource] ?? pl.resource} here`);
     }
-    if (!opts.free && !w.canAfford(def.cost)) add(`Not enough money (${formatMoney(def.cost)} needed)`);
+    res.siteOk = reasons.length === 0;
+    res.affordable = !!opts.free || w.canAfford(def.cost);
+    if (!res.affordable) add(`Not enough money (${formatMoney(def.cost)} needed)`);
     void wetCells;
     res.replaces = [...replaces];
     res.ground = pl.onWater ? Math.max(w.waterLevel(fp.x + (fp.w >> 1), fp.y + (fp.h >> 1)), w.cellHeight(fp.x, fp.y)) : this.lotGround(fp.x, fp.y, fp.w, fp.h, ignoreId);
@@ -1455,8 +1504,10 @@ export class WorldActions {
         list.push({ v, f, vx, vy });
       }
     if (!list.length) return null;
-    const brushAvg = avgW ? avgS / avgW : 0;
-    const lvl = target ?? w.heightAt(wx, wz);
+    // flatten: toward `target` (the stroke's start height) or the brush average;
+    // level: toward `target` or just above sea level (waterfront land)
+    const flat = target ?? (avgW ? avgS / avgW : 0);
+    const lvl = target ?? w.seaLevel + LEVEL_ABOVE_SEA;
     const verts: number[] = [];
     const heights: number[] = [];
     let volume = 0;
@@ -1486,7 +1537,7 @@ export class WorldActions {
         }
         case 'flatten': {
           const k = 1 - Math.exp(-strength * f * 0.6);
-          nh = h + (brushAvg - h) * k;
+          nh = h + (flat - h) * k;
           break;
         }
         case 'level': {
@@ -1551,13 +1602,19 @@ export class WorldActions {
     return out;
   }
 
+  /** planting cost of a treeBrush() result (removal is free) */
+  treeBrushCost(cells: { d: number; old: number }[]): number {
+    let cost = 0;
+    for (const c of cells) cost += Math.max(0, c.d - c.old) * TREE_COST;
+    return cost;
+  }
+
   plantTrees(x: number, y: number, radiusCells: number, density: number): ActionResult {
     const w = this.world;
     if (!w) return fail('No city loaded');
     const cells = this.treeBrush(x, y, radiusCells, density);
     if (!cells.length) return fail(density > 0 ? 'No room for more trees here' : 'No trees here');
-    let cost = 0;
-    for (const c of cells) cost += Math.max(0, c.d - c.old) * TREE_COST;
+    const cost = this.treeBrushCost(cells);
     if (!w.canAfford(cost)) return fail(`Not enough money (${formatMoney(cost)})`);
     return this.run(density > 0 ? 'Plant trees' : 'Remove trees', (tx, world) => {
       if (!tx.spend(cost, 'landscaping')) return fail('Not enough money');

@@ -33,6 +33,11 @@ export interface FloodOptions {
   edges?: boolean;
   /** edge nodes with a lower, earlier-flooded interior neighbour drain inward instead of off-map */
   redirectEdges?: boolean;
+  /**
+   * Priority-Flood+ε: filled cells rise by ε per step away from the spill
+   * point so flats drain toward their outlet (0 = perfectly flat fill).
+   */
+  epsilon?: number;
 }
 
 const heapCache = { heap: new MinHeap(4096), queue: new IntQueue(4096) };
@@ -76,6 +81,7 @@ export function priorityFlood(z: Float32Array, w: number, h: number, opt: FloodO
     }
   }
   const pending = -2;
+  const eps = opt.epsilon ?? 0;
   let oc = 0;
   while (pit.length > 0 || heap.size > 0) {
     const c = pit.length > 0 ? pit.shift() : heap.pop();
@@ -89,9 +95,11 @@ export function priorityFlood(z: Float32Array, w: number, h: number, opt: FloodO
       const j = ny * w + nx;
       if (closed[j]) continue;
       closed[j] = 1;
-      if (F[j] <= fc) {
-        if (F[j] < fc) raised[j] = 1;
-        F[j] = fc;
+      if (F[j] <= fc + eps) {
+        if (F[j] < fc + eps) {
+          if (F[j] < fc) raised[j] = 1;
+          F[j] = fc + eps;
+        }
         rec[j] = c;
         recLen[j] = N8_LEN[k];
         pit.push(j);
