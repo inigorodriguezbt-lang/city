@@ -10,4 +10,6 @@ export class ZoneRenderer {
   update(_dt: number): void {}
   /** show the zoning grid (zoneable cells near roads) — used while a zoning tool is active */
   setGridVisible(_v: boolean): void {}
+  /** show district colors/borders (district tool / districts panel) */
+  setDistrictsVisible(_v: boolean): void {}
 }

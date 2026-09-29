@@ -34,5 +34,7 @@ export class CameraController {
   }
   /** follow a moving target (return null to stop following) */
   follow(_fn: (() => THREE.Vector3 | null) | null): void {}
+  /** camera shake (earthquakes, explosions): intensity in meters, duration seconds */
+  shake(_intensity: number, _duration: number): void {}
   reset(): void { if (this.world) this.flyTo(this.world.home.x, this.world.home.y, 600); }
 }

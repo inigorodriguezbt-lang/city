@@ -337,3 +337,24 @@ checklist for new players, colour-blind friendly overlays legend.
   (slow but functional). Serve `dist/` with `npx http-server dist -p 8080 -s`
   or run `npx vite --port 5173` and use Playwright
   (`require('/opt/node22/lib/node_modules/playwright')`).
+
+## 10. Agent workflow rules
+
+- Only create/modify files you own (section 5) plus `sandbox/<your-agent>/**`.
+  Never edit frozen contracts or other agents' files; never `git commit`,
+  never `npm install` (ask in your report), never write to `dist/`.
+- Typecheck only your files: `npx tsc --noEmit -p . 2>&1 | grep -E '^src/(your/paths)'`
+  must print nothing. (Other agents' files may be mid-edit; ignore their errors.)
+- Visual/runtime iteration: build a sandbox page `sandbox/<agent>/index.html`
+  (+ `main.ts`) that imports only your module and the frozen core, run
+  `npx vite --port <your port> --strictPort` in the background, and screenshot
+  with `node scripts/shot.cjs http://localhost:<port>/sandbox/<agent>/ /tmp/<agent>-x.png 6000`
+  then LOOK at the PNG (Read tool) and iterate until it is genuinely beautiful
+  and correct. Kill your dev server when done. Ports: mapgen 5201, tools 5202,
+  sim-core 5203, fields 5204, traffic 5205, events 5206, render-core 5207,
+  roads 5208, buildings-zoned 5209, buildings-service 5210, ui-hud 5211,
+  ui-menus 5212, systems 5213.
+- Headless Chromium uses SwiftShader: it is slow — keep sandbox scenes modest
+  and wait long enough before screenshots.
+- No placeholders, no TODOs, no "simplified for now". Ship complete, polished,
+  performant code with sensible comments.

@@ -5,8 +5,9 @@
 import { EventBus } from '../core/EventBus';
 import type { GameEvents } from '../core/events';
 import { MAX_SPEED_LEVEL, SPEEDS } from '../core/constants';
-import { RoadType, type MapSettings } from '../core/types';
+import { Layer, RoadType, type MapSettings } from '../core/types';
 import { World } from '../world/World';
+import { RoadSurface } from '../world/roadHeight';
 import { WorldActions } from '../world/actions';
 import { generateMap } from '../world/mapgen';
 import { SettingsStore } from '../settings/SettingsStore';
@@ -56,6 +57,8 @@ export class Game {
   readonly events = new EventBus<GameEvents>();
   readonly settings: SettingsStore;
   world: World | null = null;
+  /** road/bridge surface heights for the current world (null when no world) */
+  roadSurface: RoadSurface | null = null;
 
   readonly renderer: GameRenderer;
   readonly input: InputManager;
@@ -90,6 +93,10 @@ export class Game {
   private loading = false;
 
   constructor(readonly viewport: HTMLElement, readonly uiRoot: HTMLElement) {
+    // keep road deck cache fresh before any renderer reacts to the change
+    this.events.on('world:changed', ({ rect, layers }) => {
+      if (layers & (Layer.Road | Layer.Terrain | Layer.Water)) this.roadSurface?.invalidate(rect);
+    });
     this.settings = new SettingsStore(this.events);
     this.settings.load();
     this.renderer = new GameRenderer(this, viewport);
@@ -189,6 +196,7 @@ export class Game {
     this.menus.showLoading('Building the city…', 0.95);
     this.world = world;
     world.bus = this.events;
+    this.roadSurface = new RoadSurface(world);
     for (const s of this.worldSystems) s.onWorldLoaded?.(world);
     try {
       await this.fields.recomputeNow();
@@ -214,6 +222,7 @@ export class Game {
     this.actions.clearHistory();
     this.world.bus = null;
     this.world = null;
+    this.roadSurface = null;
   }
 
   quitToMenu(): void {
