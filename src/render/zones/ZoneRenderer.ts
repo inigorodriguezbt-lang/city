@@ -391,7 +391,8 @@ export class ZoneRenderer {
   private lightLevel(): number {
     const lt = this.game.renderer.lighting;
     // lit like the ground by day, a faint self-lit tint at night
-    return 0.08 + 0.92 * Math.min(1, Math.max(0, lt.daylight));
+    const d = Math.min(1, Math.max(0, lt.daylight));
+    return 0.025 + 0.975 * d * Math.sqrt(d);
   }
 
   private districtSignature(w: World): string {

@@ -545,7 +545,7 @@ export class FurnitureSystem {
     this.poolGeo.index = quad.index;
     this.poolGeo.setAttribute('position', quad.getAttribute('position'));
     this.glowMat = lightMaterial(GLOW_VS, GLOW_FS, { uNight: { value: 0 }, uPixel: { value: 0.001 }, uColor: { value: new THREE.Color(1.0, 0.7, 0.4) } }, true);
-    this.poolMat = lightMaterial(POOL_VS, POOL_FS, { uNight: { value: 0 }, uColor: { value: new THREE.Color(0.075, 0.05, 0.026) } }, true);
+    this.poolMat = lightMaterial(POOL_VS, POOL_FS, { uNight: { value: 0 }, uColor: { value: new THREE.Color(0.08, 0.048, 0.02) } }, true);
     this.sigMat = lightMaterial(SIG_VS, SIG_FS, { uTime: { value: 0 } }, false);
     this.glow = new THREE.Mesh(this.glowGeo, this.glowMat);
     this.pool = new THREE.Mesh(this.poolGeo, this.poolMat);
