@@ -204,6 +204,14 @@ export class InputManager {
     });
   }
 
+  /** abort a pending captureNextKey() (resolves it with null) */
+  cancelCapture(): void {
+    const r = this.captureResolve;
+    this.captureResolve = null;
+    this.captureModifier = null;
+    r?.(null);
+  }
+
   /** true while captureNextKey() is waiting */
   get capturing(): boolean {
     return this.captureResolve !== null;

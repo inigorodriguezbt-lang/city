@@ -107,6 +107,11 @@ export class TransitTool implements Tool {
     this.lastKeyAt = performance.now();
   };
 
+  /** Game asks this before opening the chat on Enter: finishing a line wins */
+  wantsEnter(): boolean {
+    return this.active && this.stops.length >= 2 && (this.lastKey === 'Enter' || this.lastKey === 'NumpadEnter') && performance.now() - this.lastKeyAt < 500;
+  }
+
   /** Enter is bound to the chat: finish the line instead when drawing */
   private onChatAction = (): void => {
     if (!this.active || this.stops.length < 2) return;

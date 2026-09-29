@@ -51,6 +51,17 @@ export interface Placement {
  * optionally auto-rotated toward the closest road and magnetically snapped
  * so the front edge touches it.
  */
+/** true if any cell just behind the footprint (opposite its front) is water */
+function backTouchesWater(w: World, fx: number, fy: number, fw: number, fh: number, front: Dir): boolean {
+  const back = ((front + 2) % 4) as Dir;
+  const cells: [number, number][] = [];
+  if (back === Dir.N) for (let i = 0; i < fw; i++) cells.push([fx + i, fy - 1]);
+  if (back === Dir.S) for (let i = 0; i < fw; i++) cells.push([fx + i, fy + fh]);
+  if (back === Dir.W) for (let i = 0; i < fh; i++) cells.push([fx - 1, fy + i]);
+  if (back === Dir.E) for (let i = 0; i < fh; i++) cells.push([fx + fw, fy + i]);
+  return cells.some(([x, y]) => w.isWater(x, y));
+}
+
 export function smartPlacement(w: World, def: BuildingDef, wx: number, wz: number, rot: Dir, auto: boolean): Placement {
   const anchor = (r: Dir) => {
     const s = r === Dir.N || r === Dir.S ? { w: def.w, h: def.h } : { w: def.h, h: def.w };
@@ -58,16 +69,20 @@ export function smartPlacement(w: World, def: BuildingDef, wx: number, wz: numbe
     return { x: x0 + Math.floor(s.w / 2), y: y0 + Math.floor(s.h / 2) };
   };
   const rail = !!def.placement?.rail && def.placement?.road === false;
+  // shoreline models (pumps, harbors, marinas…) put the water behind the lot
+  const shore = !!def.placement?.shore;
   const evalDir = (r: Dir) => {
     const a = anchor(r);
     const fp = footprintAt(def, a.x, a.y, r);
-    return { a, gap: frontGap(w, fp.x, fp.y, fp.w, fp.h, r, 2, rail) };
+    const gap = frontGap(w, fp.x, fp.y, fp.w, fp.h, r, 2, rail);
+    return { a, gap, back: shore ? backTouchesWater(w, fp.x, fp.y, fp.w, fp.h, r) : true };
   };
-  let best: { r: Dir; a: { x: number; y: number }; gap: number } | null = null;
+  let best: { r: Dir; a: { x: number; y: number }; gap: number; back: boolean } | null = null;
   if (auto) {
     for (const r of [rot, ...DIR_ORDER.filter((d) => d !== rot)]) {
       const e = evalDir(r);
-      if (!best || e.gap < best.gap) best = { r, ...e };
+      const better = !best || (e.gap !== Infinity && best.gap === Infinity) || (e.gap !== Infinity && (e.back && !best.back ? e.gap <= best.gap + 1 : e.gap < best.gap && (e.back || !best.back)));
+      if (better) best = { r, ...e };
     }
   }
   if (!best || best.gap === Infinity) {

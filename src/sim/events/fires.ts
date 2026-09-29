@@ -94,7 +94,7 @@ export class FireManager {
   }
 
   /** chance a building catches fire today */
-  private dailyChance(world: World, b: Building, risk: number, detectors: (b: Building) => boolean): number {
+  private dailyChance(world: World, b: Building, risk: number, detectors: (b: Building) => number): number {
     if (!standing(b) || b.flags & BFlag.OnFire) return 0;
     let base: number;
     if (b.kind === 'service') {
@@ -110,7 +110,7 @@ export class FireManager {
     let p = (base / 360) * (1 - 0.93 * Math.min(1, cov * 1.15)) * risk;
     if (b.flags & BFlag.Abandoned) p *= 3.5;
     if (!(b.flags & BFlag.Powered) && b.kind === 'zoned') p *= 1.15; // candles & generators
-    if (detectors(b)) p *= 0.55;
+    p *= detectors(b);
     return p;
   }
 
@@ -119,11 +119,12 @@ export class FireManager {
     const started: Building[] = [];
     if (world.time.day < 20 || world.buildings.size === 0) return started;
     const sim = this.game.sim;
-    const detectors = (b: Building) => {
+    // policy fire-risk multiplier (smoke detectors etc.) from the simulation
+    const detectors = (b: Building): number => {
       try {
-        return sim.isPolicyActive('smoke_detectors', world.district[world.idx(b.x, b.y)] || undefined);
+        return sim.fireRiskAt(b);
       } catch {
-        return false;
+        return 1;
       }
     };
     for (const b of world.buildings.values()) {

@@ -51,7 +51,9 @@ export class RoadSurface {
         if (!w.isBridge(xx, yy)) { hb = w.cellHeight(xx, yy) + ROAD_LIFT; break; }
       }
       const water = w.waterLevel(x, y);
-      const floor = Math.max(water, w.cellHeight(x, y)) + MIN_CLEAR;
+      // wet cells keep ship clearance; dry abutment cells (steep banks the road
+      // tool folds into the bridge) only need to clear their own ground
+      const floor = w.isWater(x, y) ? Math.max(water, w.cellHeight(x, y)) + MIN_CLEAR : w.cellHeight(x, y) + ROAD_LIFT;
       let base: number;
       if (!Number.isNaN(ha) && !Number.isNaN(hb)) base = ha + (hb - ha) * (a / (a + b));
       else if (!Number.isNaN(ha)) base = ha;

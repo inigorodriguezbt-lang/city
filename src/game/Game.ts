@@ -311,7 +311,12 @@ export class Game {
     i.onAction('game.quickload', () => !!this.world && !this.chat.isOpen && void this.saves.quickload());
     i.onAction('edit.undo', () => inGame() && this.actions.undo());
     i.onAction('edit.redo', () => inGame() && this.actions.redo());
-    i.onAction('ui.chat', () => inGame() && this.chat.open());
+    i.onAction('ui.chat', () => {
+      // a tool may claim Enter (e.g. finishing a transit line)
+      const t = this.tools.current as { wantsEnter?: () => boolean } | null;
+      if (t?.wantsEnter?.()) return;
+      if (inGame()) this.chat.open();
+    });
     i.onAction('ui.command', () => inGame() && this.chat.open('/'));
     i.onAction('ui.toggleHud', () => inGame() && this.ui.setHudVisible(!this.ui.hudVisible));
     i.onAction('ui.screenshot', () => !!this.world && void this.downloadScreenshot());

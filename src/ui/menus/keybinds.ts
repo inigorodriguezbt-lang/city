@@ -286,12 +286,7 @@ export function buildKeybindTable(ctx: MenuCtx): KeybindTable {
       captureSeq++;
       capturing = null;
       paintAll();
-      // resolve the pending capture: InputManager treats Escape as "cancel" and
-      // swallows the event, so nothing else reacts to this synthetic key
-      const input = ctx.game.input as unknown as { capturing?: boolean };
-      if (input.capturing !== false) {
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
-      }
+      ctx.game.input.cancelCapture();
     },
   };
 }
