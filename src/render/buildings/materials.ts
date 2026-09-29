@@ -1211,7 +1211,17 @@ vec3 bNW = bN;
 const FRAG_EMIT = /* glsl */ `
 #include <emissivemap_fragment>
 totalEmissiveRadiance += bO.emit;
-#ifndef USE_ENVMAP
+#ifdef USE_ENVMAP
+if (bO.refl > 0.001 && uNight < 0.999) {
+  // stylised daylight fill: glazing catches the bright sky haze and the sunlit
+  // city even where the physically reflected ray hits the env map's dark ground
+  vec3 rdir = reflect(bV, bNW);
+  float nv = clamp(dot(-bV, bNW), 0.0, 1.0);
+  float F = bO.f0 + (1.0 - bO.f0) * pow(1.0 - nv, 5.0);
+  vec3 fill = mix(uSkyGround * 1.3 + uSkyHorizon * 0.3, uSkyHorizon, smoothstep(-0.4, 0.2, rdir.y));
+  totalEmissiveRadiance += fill * F * bO.refl * (1.0 - bO.rough) * 0.45 * (1.0 - uNight);
+}
+#else
 if (bO.refl > 0.001) {
   vec3 rdir = reflect(bV, bNW);
   float nv = clamp(dot(-bV, bNW), 0.0, 1.0);
