@@ -11,9 +11,9 @@ export class FarLand {
   readonly S: number;
   readonly extent: number;
   private noise: Noise;
-  /** per border cell (4 edges × size): 0 = land, 1 = sea, smoothed */
-  private seaEdge: Float32Array;
-  private edgeH: Float32Array;
+  /** prefix sums along each edge (4 × (size+1)) of sea flag and edge height */
+  private seaPS: Float64Array;
+  private hPS: Float64Array;
   private amp: number;
   private ridged: boolean;
 
@@ -22,11 +22,11 @@ export class FarLand {
     this.extent = Math.max(15000, this.S * 1.8);
     this.noise = new Noise((world.settings.seed ^ 0x51f15e) >>> 0);
     const t = world.theme;
-    this.amp = 30 + t.mountainousness * 320 * (0.5 + world.settings.mountains);
+    this.amp = 30 + t.mountainousness * 380 * (0.5 + world.settings.mountains);
     this.ridged = t.id === 'alpine' || t.id === 'boreal' || t.mountainousness > 0.55;
     const s = world.size;
-    this.seaEdge = new Float32Array(4 * s);
-    this.edgeH = new Float32Array(4 * s);
+    this.seaPS = new Float64Array(4 * (s + 1));
+    this.hPS = new Float64Array(4 * (s + 1));
     this.computeEdges();
   }
 
@@ -34,55 +34,81 @@ export class FarLand {
   computeEdges(): void {
     const w = this.world;
     const s = w.size;
-    const raw = new Float32Array(4 * s);
-    const hraw = new Float32Array(4 * s);
-    for (let e = 0; e < 4; e++)
+    for (let e = 0; e < 4; e++) {
+      let a = 0, b = 0;
+      const base = e * (s + 1);
+      this.seaPS[base] = 0;
+      this.hPS[base] = 0;
       for (let i = 0; i < s; i++) {
         const [x, y] = e === 0 ? [i, 0] : e === 1 ? [s - 1, i] : e === 2 ? [i, s - 1] : [0, i];
-        const lv = w.waterLevel(x, y);
-        const sea = w.isWater(x, y) && Math.abs(w.water[w.idx(x, y)] - w.seaLevel) < 0.05 ? 1 : 0;
-        raw[e * s + i] = sea;
-        hraw[e * s + i] = w.isWater(x, y) ? Math.min(lv, w.cellHeight(x, y)) : w.cellHeight(x, y);
+        const wet = w.isWater(x, y);
+        const sea = wet && Math.abs(w.water[w.idx(x, y)] - w.seaLevel) < 0.05 ? 1 : 0;
+        a += sea;
+        b += wet ? Math.min(w.waterLevel(x, y), w.cellHeight(x, y)) : w.cellHeight(x, y);
+        this.seaPS[base + i + 1] = a;
+        this.hPS[base + i + 1] = b;
       }
-    const R = 8;
-    for (let e = 0; e < 4; e++)
-      for (let i = 0; i < s; i++) {
-        let a = 0, b = 0, n = 0;
-        for (let k = -R; k <= R; k++) {
-          const j = Math.min(s - 1, Math.max(0, i + k));
-          a += raw[e * s + j];
-          b += hraw[e * s + j];
-          n++;
-        }
-        this.seaEdge[e * s + i] = a / n;
-        this.edgeH[e * s + i] = b / n;
-      }
+    }
   }
 
-  private edgeSample(arr: Float32Array, ex: number, ez: number): number {
-    // blend the (up to two) nearest edges at corners
+  /** mean of an edge profile around border index i (half-width hw cells) */
+  private edgeMean(ps: Float64Array, e: number, i: number, hw: number): number {
     const s = this.world.size;
-    const cx = Math.min(s - 1, Math.max(0, Math.floor(ex / CELL)));
-    const cz = Math.min(s - 1, Math.max(0, Math.floor(ez / CELL)));
-    const dl = ex, dr = this.S - ex, dt = ez, db = this.S - ez;
-    const m = Math.min(dl, dr, dt, db);
-    if (m === dt) return arr[0 * s + cx];
-    if (m === dr) return arr[1 * s + cz];
-    if (m === db) return arr[2 * s + cx];
-    return arr[3 * s + cz];
+    const lo = Math.max(0, Math.min(s - 1, Math.floor(i - hw)));
+    const hi = Math.max(lo + 1, Math.min(s, Math.ceil(i + hw)));
+    const base = e * (s + 1);
+    return (ps[base + hi] - ps[base + lo]) / (hi - lo);
   }
 
-  private fbm(x: number, z: number, oct: number): number {
-    let a = 0.5, f = 1, sum = 0, norm = 0;
+  /** edge profile sampled beyond the map: widening average, corners blend both edges */
+  private edgeSample(ps: Float64Array, ex: number, ez: number, x: number, z: number, hw: number): number {
+    const S = this.S;
+    const ix = ex / CELL, iz = ez / CELL;
+    const dxo = x < 0 ? -x : x > S ? x - S : 0;
+    const dzo = z < 0 ? -z : z > S ? z - S : 0;
+    const ex0 = x < S / 2 ? 3 : 1; // west / east edge
+    const ez0 = z < S / 2 ? 0 : 2; // north / south edge
+    const vx = this.edgeMean(ps, ex0, iz, hw);
+    const vz = this.edgeMean(ps, ez0, ix, hw);
+    // weight each edge by how much the point lies beyond it (inside map: nearest edge)
+    let wx: number, wz: number;
+    if (dxo > 0 || dzo > 0) {
+      wx = dxo;
+      wz = dzo;
+    } else {
+      const mx = Math.min(ex, S - ex), mz = Math.min(ez, S - ez);
+      wx = mx <= mz ? 1 : 0;
+      wz = 1 - wx;
+    }
+    const sum = wx + wz || 1;
+    return (vx * wx + vz * wz) / sum;
+  }
+
+  /**
+   * Band-limited fbm: octaves whose wavelength (m) falls below `minWave` fade
+   * out, so detail never exceeds what the ring's row spacing can represent
+   * (otherwise sharp ridges alias into radial streaks).
+   */
+  private fbm(x: number, z: number, wavelength: number, oct: number, minWave: number): number {
+    let a = 0.5, f = 1 / wavelength, lambda = wavelength, sum = 0, norm = 0;
     for (let o = 0; o < oct; o++) {
+      const keep = Math.min(1, Math.max(0, (lambda - minWave) / minWave));
+      if (keep <= 0 && o > 0) break;
       let n = this.noise.noise2(x * f, z * f);
       if (this.ridged) n = 1 - Math.abs(n) * 2;
-      sum += n * a;
-      norm += a;
+      const wgt = a * (o === 0 ? 1 : keep);
+      sum += n * wgt;
+      norm += wgt;
       a *= 0.5;
       f *= 2.03;
+      lambda /= 2.03;
     }
     return sum / norm;
+  }
+
+  /** radial spacing of the ring rows at distance d beyond the border (m) */
+  static rowSpacing(d: number): number {
+    return 32 + d * 0.12;
   }
 
   /** terrain height at world (x, z) outside (or on) the map */
@@ -91,20 +117,28 @@ export class FarLand {
     const ex = Math.min(S, Math.max(0, x)), ez = Math.min(S, Math.max(0, z));
     const d = Math.hypot(x - ex, z - ez);
     const w = this.world;
-    const hEdge = d < 1 ? w.heightAt(ex, ez) : this.edgeSample(this.edgeH, ex, ez) * 0.6 + w.heightAt(ex, ez) * 0.4;
-    if (d < 1) return hEdge;
+    if (d < 1) return w.heightAt(ex, ez);
+    const dc = d / CELL;
+    const near = Math.exp(-d / 420);
+    // narrow profile near the border (ridges and valleys carry on), widening outward
+    const hEdge = this.edgeSample(this.hPS, ex, ez, x, z, 1.5 + dc * 0.45) * (1 - near) + w.heightAt(ex, ez) * near;
     const t = Math.min(1, d / 2600);
     const blend = t * t * (3 - 2 * t);
-    let sea = this.edgeSample(this.seaEdge, ex, ez);
+    // far out the land settles on a broad regional level (no extruded border features)
+    const tw = Math.min(1, d / 5000);
+    const regional = this.edgeSample(this.hPS, ex, ez, x, z, 48 + dc * 0.9);
+    const base = hEdge + (regional - hEdge) * tw * tw * (3 - 2 * tw);
+    let sea = this.edgeSample(this.seaPS, ex, ez, x, z, 4 + dc * 0.6);
     sea += this.noise.noise2(x / 2300 + 11.3, z / 2300 - 7.1) * 0.55 * blend;
     sea = Math.min(1, Math.max(0, (sea - 0.3) / 0.4));
     sea = sea * sea * (3 - 2 * sea);
-    const hillsBase = Math.max(hEdge, w.seaLevel + 3);
-    const rise = Math.min(1, d / 5000);
-    const hills = hillsBase + (this.fbm(x / 4200, z / 4200, 5) * 0.5 + 0.35) * this.amp * rise + this.fbm(x / 900, z / 900, 3) * 12 * blend;
-    const ocean = w.seaLevel - 6 - 34 * blend - this.fbm(x / 3000, z / 3000, 2) * 8;
+    const hillsBase = Math.max(base, w.seaLevel + 3);
+    const rise = Math.min(1, d / 3200);
+    const minWave = FarLand.rowSpacing(d) * 2.5;
+    const hills = hillsBase + (this.fbm(x, z, 4200, 5, minWave) * 0.5 + 0.35) * this.amp * rise + this.fbm(x, z, 900, 3, minWave) * 12 * blend;
+    const ocean = w.seaLevel - 6 - 34 * blend - this.fbm(x, z, 3000, 2, minWave) * 8;
     const target = hills * (1 - sea) + ocean * sea;
-    return hEdge * (1 - blend) + target * blend;
+    return base * (1 - blend) + target * blend;
   }
 
   /** Coarse height texture over [-extent, S+extent]^2 (R = height) for water depth. */
@@ -130,13 +164,18 @@ export class FarLand {
   /** Build the ring mesh geometry (the map interior is left open). */
   buildGeometry(): THREE.BufferGeometry {
     const S = this.S, E = this.extent;
-    const steps = [0, 48, 112, 208, 352, 560, 860, 1280, 1850, 2600, 3600, 4900, 6600, 8800, 11500];
-    const outer: number[] = [];
-    for (const v of steps) if (v < E) outer.push(v);
+    // geometric rows: dense near the border, ~12 % of the distance far out
+    const outer: number[] = [0];
+    for (let d = 0; ; ) {
+      d += FarLand.rowSpacing(d);
+      if (d >= E * 0.97) break;
+      outer.push(Math.round(d));
+    }
     outer.push(E);
     const axis: number[] = [];
     for (let i = outer.length - 1; i > 0; i--) axis.push(-outer[i]);
-    const inner = 128;
+    // fine spacing along the border so the ring's first row follows the map edge
+    const inner = CELL * 2;
     for (let v = 0; v < S; v += inner) axis.push(v);
     axis.push(S);
     for (let i = 1; i < outer.length; i++) axis.push(S + outer[i]);
@@ -147,7 +186,8 @@ export class FarLand {
         const x = axis[i], z = axis[j];
         const o = (j * n + i) * 3;
         pos[o] = x;
-        pos[o + 1] = this.height(x, z);
+        // vertices strictly inside the map are never referenced by a ring quad
+        pos[o + 1] = x > 0 && z > 0 && x < S && z < S ? 0 : this.height(x, z);
         pos[o + 2] = z;
       }
     const idx: number[] = [];

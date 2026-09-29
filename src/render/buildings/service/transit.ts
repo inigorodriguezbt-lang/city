@@ -8,7 +8,7 @@ import { antennaMast, clockFace, civicBlock, hall, hangar, lampsAlong, quay, rol
 
 // ── shared transit parts ───────────────────────────────────────────────────
 /** pair of rails with sleepers along X from x0 to x1 at z */
-function track(k: Kit, x0: number, x1: number, z: number, y = 0.08, ballast = true): void {
+export function track(k: Kit, x0: number, x1: number, z: number, y = 0.08, ballast = true): void {
   if (ballast) k.box('dirt', (x0 + x1) / 2, y - 0.08, z, x1 - x0, 0.3, 3.4, 0x7a746a, { top: 'dirt', topColor: 0x8a847a });
   const n = Math.floor((x1 - x0) / 0.8);
   if (!k.lo) for (let i = 0; i < n; i++) k.box('wood', x0 + (i + 0.5) * ((x1 - x0) / n), y + 0.2, z, 0.28, 0.12, 2.6, 0x5a4a3a, { top: 'wood' });
@@ -16,7 +16,7 @@ function track(k: Kit, x0: number, x1: number, z: number, y = 0.08, ballast = tr
 }
 
 /** platform with canopy along X */
-function platform(k: Kit, x: number, z: number, len: number, w: number, h = 1.0, canopy: number = 0xdedcd6, lights = true): void {
+export function platform(k: Kit, x: number, z: number, len: number, w: number, h = 1.0, canopy: number = 0xdedcd6, lights = true): void {
   k.box('concrete', x, 0, z, len, h, w, 0xb8b4aa, { top: 'paving', topColor: 0xc8c2b4 });
   k.box('plain', x, h - 0.01, z + w / 2 - 0.3, len, 0.02, 0.4, C.paintYellow, { top: 'plain' });
   k.box('plain', x, h - 0.01, z - w / 2 + 0.3, len, 0.02, 0.4, C.paintYellow, { top: 'plain' });
@@ -31,7 +31,7 @@ function platform(k: Kit, x: number, z: number, len: number, w: number, h = 1.0,
 }
 
 /** overhead catenary mast */
-function catenaryPole(k: Kit, x: number, z: number, span: number, h = 6.5): void {
+export function catenaryPole(k: Kit, x: number, z: number, span: number, h = 6.5): void {
   k.cyl('metal', x, 0, z - span / 2, 0.14, 0.12, h, 0x6a6e72, 6);
   k.beam('metal', [x, h - 0.2, z - span / 2], [x, h - 0.2, z + span / 2], 0.1, 0.12, 0x6a6e72);
 }

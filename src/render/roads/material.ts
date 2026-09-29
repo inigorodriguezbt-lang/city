@@ -55,6 +55,8 @@ float rRange(float x, float a, float b) {
 }
 // two rails of one track centered at lateral c (x = lateral coordinate)
 float rRails(float x, float c, float hw) { return max(rBand(x - c - 0.7175, hw), rBand(x - c + 0.7175, hw)); }
+// flangeway grooves on the gauge side of both rails of a track at c
+float rGrooves(float x, float c) { return max(rBand(x - c - 0.6475, 0.028), rBand(x - c + 0.6475, 0.028)); }
 
 // lane markings: returns (white, yellow) paint coverage
 vec2 rMarks(float style, float flags, float s, float t, float hw) {
@@ -187,15 +189,19 @@ const SURFACE = /* glsl */ `
     }
     vec2 paint = rMarks(rStyle, rFlags, rs, rt, rhw);
     // tram tracks embedded in the inner lanes
-    float rails = 0.0, bed = 0.0;
+    float rails = 0.0, bed = 0.0, groove = 0.0;
     if (!rJunc && rStyle > 7.5 && rBit(rFlags, 64.0) > 0.5) {
-      rails = max(rRails(rs, 1.53, 0.045), rRails(rs, -1.53, 0.045));
-      bed = max(rBand(as - 1.53, 0.95), 0.0);
+      rails = max(rRails(rs, 1.53, 0.04), rRails(rs, -1.53, 0.04));
+      // flangeways: dark grooves on the gauge side of each rail head
+      groove = max(rGrooves(rs, 1.53), rGrooves(rs, -1.53));
+      // concrete track slabs with joints every 3 m
+      bed = rBand(as - 1.53, 1.02) * (1.0 - rBand(mod(rt + 1.5, 3.0) - 1.5, 0.018) * 0.7);
     }
     if (rJunc && rBit(rFlags, 64.0) > 0.5) {
-      rails = rJunctionRails(rLocal, rFlags, 1.53, 0.045);
+      rails = rJunctionRails(rLocal, rFlags, 1.53, 0.04);
     }
-    if (bed > 0.0) rCol = mix(rCol, vec3(0.16, 0.155, 0.15) * (0.8 + 0.4 * rD.a), bed * 0.55);
+    if (bed > 0.0) rCol = mix(rCol, vec3(0.2, 0.195, 0.185) * (0.78 + 0.4 * rD.a) * (0.9 + 0.2 * rM.r), bed * 0.8);
+    rCol = mix(rCol, vec3(0.018, 0.018, 0.02), groove * 0.85);
     float wear = smoothstep(0.18, 0.62, rD.a * 0.7 + rM.r * 0.5) * (1.0 - 0.6 * rM.b);
     paint *= mix(0.35, 1.0, wear);
     vec3 paintCol = paint.y > paint.x ? vec3(0.78, 0.52, 0.07) : vec3(0.74, 0.74, 0.72);
@@ -215,14 +221,16 @@ const SURFACE = /* glsl */ `
     rSnowK = clamp(berm, 0.0, 1.0);
   } else if (rKind < 1.5) {
     // ── gravel ──
-    float pb = rD.g;
-    rCol = mix(vec3(0.17, 0.145, 0.115), vec3(0.36, 0.32, 0.26), pb) * (0.85 + 0.3 * rM.r);
+    float pb = mix(rD.g, texture2D(uDetail, rUV / 9.0 + 0.57).g, 0.4);
+    // earthy compacted gravel: tan stones in brown soil, large-scale tone drift
+    vec3 soil = vec3(0.12, 0.092, 0.064) * (0.8 + 0.4 * rD.r);
+    rCol = mix(soil, vec3(0.29, 0.245, 0.18), smoothstep(0.12, 0.75, pb)) * (0.8 + 0.4 * rM.r);
     if (!rJunc) {
       float as = abs(rs);
-      float rut = 1.0 - smoothstep(0.25, 0.55, abs(as - 1.6));
-      rCol = mix(rCol, vec3(0.2, 0.175, 0.14) * (0.8 + 0.4 * rD.r), rut * 0.55);
-      float hump = 1.0 - smoothstep(0.15, 0.55, as);
-      rCol = mix(rCol, uGrass * (0.8 + 0.4 * rD.r), hump * 0.35 * smoothstep(0.45, 0.7, rD.a));
+      float rut = 1.0 - smoothstep(0.3, 0.6, abs(as - 1.6));
+      rCol = mix(rCol, vec3(0.105, 0.085, 0.062) * (0.85 + 0.3 * rD.r), rut * 0.5);
+      float hump = 1.0 - smoothstep(0.2, 0.7, as);
+      rCol = mix(rCol, uGrass * (0.7 + 0.5 * rD.r), hump * 0.55 * smoothstep(0.4, 0.65, rD.a + 0.1 * rM.r));
       float e = smoothstep(rhw - 1.0, rhw, as);
       rCol = mix(rCol, uGrass * (0.75 + 0.5 * rD.r), e * smoothstep(0.3, 0.7, rD.r + e * 0.4));
     }
@@ -290,8 +298,12 @@ const SURFACE = /* glsl */ `
     rSnowK = 1.0;
   } else if (rKind < 6.5) {
     // ── rail ballast ──
-    float pb = rD.g;
-    rCol = mix(vec3(0.15, 0.14, 0.13), vec3(0.37, 0.35, 0.32), pb) * (0.85 + 0.3 * rM.r);
+    // two pebble scales: fine stones + coarse clumps that survive minification
+    float pb = mix(rD.g, texture2D(uDetail, rUV / 11.0 + 0.31).g, 0.45);
+    rCol = mix(vec3(0.1, 0.096, 0.09), vec3(0.3, 0.285, 0.26), pb) * (0.85 + 0.3 * rM.r);
+    // rust-stained ballast between and along the rails
+    float rustZone = rJunc ? 0.0 : (1.0 - smoothstep(0.2, 1.3, abs(abs(rs) - 2.0)));
+    rCol = mix(rCol, vec3(0.16, 0.1, 0.065) * (0.7 + 0.6 * pb), rustZone * 0.35);
     rRough = 0.95;
     rBumpH = pb;
     rBumpK = 0.7;
@@ -344,7 +356,7 @@ const SURFACE = /* glsl */ `
     rSnowK = vRWNormal.y > 0.7 ? 0.6 : 0.0;
   } else if (rKind < 10.5) {
     // ── concrete sleeper ──
-    rCol = vec3(0.33, 0.32, 0.30) * (0.85 + 0.3 * rD.a);
+    rCol = vec3(0.235, 0.228, 0.215) * (0.8 + 0.35 * rD.a) * (0.9 + 0.2 * rM.r);
     rRough = 0.9;
     rSnowK = vRWNormal.y > 0.7 ? 0.6 : 0.0;
   } else if (rKind < 11.5) {

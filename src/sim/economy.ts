@@ -44,6 +44,13 @@ export class EconomyEngine {
       counts[t]++;
       if (flags[i] & 1) bridges++;
     }
+    // regional highway / railway cells from the founding map cost the city nothing
+    for (const i of ctx.state.stateRoads) {
+      const t = road[i];
+      if (t !== RoadType.Highway && t !== RoadType.Rail) continue;
+      counts[t]--;
+      if (flags[i] & 1) bridges--;
+    }
     ctx.roadCounts = counts;
     ctx.bridgeCells = bridges;
     ctx.roadsDirty = false;
@@ -96,15 +103,15 @@ export class EconomyEngine {
 
   /** Monthly amounts per category at current rates (for projections and daily accrual). */
   monthly(l: Ledger = this.ctx.state.ledger): { income: Record<string, number>; expense: Record<string, number> } {
-    const w = this.ctx.world, e = w.economy, mods = this.ctx.mods;
+    const w = this.ctx.world, e = w.economy, mods = this.ctx.mods, perks = this.ctx.perks;
     const income: Record<string, number> = {};
     const expense: Record<string, number> = {};
     for (const t of TAX_CATEGORIES) {
-      const v = (l.taxBase[t] ?? 0) * e.taxes[t] * mods.incomeMult * DAYS_PER_MONTH;
+      const v = (l.taxBase[t] ?? 0) * e.taxes[t] * mods.incomeMult * perks.tax * DAYS_PER_MONTH;
       if (v > 0) income['taxes:' + t] = v;
     }
     if (l.income.tourism > 0) income.tourism = l.income.tourism * DAYS_PER_MONTH;
-    if (l.income.exports > 0) income.exports = l.income.exports * DAYS_PER_MONTH;
+    if (l.income.exports > 0) income.exports = l.income.exports * perks.exports * DAYS_PER_MONTH;
     if (l.income.transit > 0) income.transit = l.income.transit * DAYS_PER_MONTH;
     for (const [cat, v] of Object.entries(l.upkeepBase)) {
       if (v <= 0) continue;

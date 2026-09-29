@@ -45,9 +45,16 @@ export function streetName(ctx: SimContext, b: Building | undefined): string {
 export class Chirper {
   constructor(private ctx: SimContext) {}
 
+  /** active transit lines seen at the last daily check (new-line reactions) */
+  private lines = -1;
+
   /** queue a reaction to something that just happened */
   queue(topic: string, vars: Record<string, string> = {}, target?: Building): void {
-    const q = this.ctx.state.chirp.queue;
+    const st = this.ctx.state.chirp;
+    const q = st.queue;
+    // one pending reaction per topic, and routine reactions respect their cooldown
+    if (q.some((e) => e.topic === topic)) return;
+    if (topic !== 'milestone' && topic !== 'disaster' && (st.cd[topic] ?? -1) > this.ctx.day) return;
     if (q.length >= 6) q.shift();
     q.push({ topic, vars, x: target ? target.x + (target.w >> 1) : undefined, y: target ? target.y + (target.h >> 1) : undefined, buildingId: target?.id });
   }
@@ -59,6 +66,9 @@ export class Chirper {
       return;
     }
     if (day < st.next) return;
+    const lines = ctx.world.transitLines.filter((l) => l.active).length;
+    if (this.lines >= 0 && lines > this.lines) this.queue('new_line');
+    this.lines = lines;
     if (ctx.world.stats.population <= 0 && !st.queue.length) return;
     let cand: Candidate | null = null;
     while (st.queue.length && !cand) {
@@ -128,6 +138,10 @@ export class Chirper {
     if (s.demand.res > 0.75 && pop > 1000) add('homes_wanted', 1);
     if (s.tourists > 1000) add('tourism', 0.9, undefined, { building: this.landmarkName() });
     if (w.economy.money < 0) add('budget_bad', 1.5);
+    if (a.problems(Problem.Fire) > 0) add('fire', 2.5, sampleOf(Problem.Fire));
+    if (a.jobs.off > 400 && s.demand.off > 0.2) add('offices', 0.6);
+    if (ctx.state.monthExports > 3000) add('exports', 0.5);
+    if (ctx.unlocked('education') && s.education < 25 && pop > 5000) add('education_bad', 1);
     const wt = w.weather.type;
     const weatherTopic = wt === 'rain' ? 'weather_rain' : wt === 'snow' || wt === 'blizzard' ? 'weather_snow' : wt === 'heatwave' ? 'weather_heat' : wt === 'storm' ? 'weather_storm' : wt === 'fog' ? 'weather_fog' : wt === 'clear' ? 'weather_clear' : '';
     if (weatherTopic) add(weatherTopic, wt === 'clear' ? 0.4 : 1.2);

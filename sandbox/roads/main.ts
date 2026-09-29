@@ -1,7 +1,7 @@
 // Roads + zones sandbox: a synthetic valley (hills, a river with water) and a
 // hand-built network exercising every road type, junction shape, bridges,
 // rail, tram, dead ends and slopes; zoned lots, a few buildings, districts.
-// URL params: ?t=golden|noon|dusk|night|rain|snow  &cam=<preset>  &grid=1  &districts=1  &lod=1
+// URL params: ?t=golden|noon|dusk|night|rain|snow|autumn  &cam=<preset>  &grid=1  &districts=1  &live=1 (keep rendering)
 import * as THREE from 'three';
 import { EventBus } from '../../src/core/EventBus';
 import type { GameEvents } from '../../src/core/events';
@@ -160,7 +160,8 @@ const LOOKS: Record<string, Look> = {
   golden: { sun: [0.2, 9], sunCol: 0xffb070, sunI: 3.2, sky: 0x9fb8d8, ground: 0x6b5a45, hemiI: 0.9, bg: 0xe9c9a4, fog: 0xe0c4a2, night: 0, exposure: 1.0 },
   noon: { sun: [0.8, 58], sunCol: 0xfff4e6, sunI: 3.4, sky: 0xa8c8f0, ground: 0x5a6045, hemiI: 1.1, bg: 0xa9c7ea, fog: 0xbfd4ea, night: 0, exposure: 0.95 },
   dusk: { sun: [2.6, 1.5], sunCol: 0xff8a50, sunI: 1.2, sky: 0x55648c, ground: 0x2a2530, hemiI: 0.55, bg: 0x6a6a8e, fog: 0x7a6f86, night: 0.75, exposure: 1.1 },
-  night: { sun: [3.6, 35], sunCol: 0x6f86c0, sunI: 0.22, sky: 0x1c2a48, ground: 0x0c0c10, hemiI: 0.22, bg: 0x0b1224, fog: 0x0e1628, night: 1, exposure: 1.2 },
+  // night exposure mimics the game's eye adaptation (SkySystem raises exposure up to ~3.4 at night)
+  night: { sun: [3.6, 35], sunCol: 0x6f86c0, sunI: 0.07, sky: 0x1c2a48, ground: 0x0c0c10, hemiI: 0.08, bg: 0x060a14, fog: 0x0a1020, night: 1, exposure: 3.2 },
   rain: { sun: [1.1, 40], sunCol: 0xd8dde4, sunI: 0.9, sky: 0x9aa4b0, ground: 0x4a4c50, hemiI: 1.25, bg: 0x8e98a4, fog: 0x8d97a3, night: 0.15, exposure: 1.05 },
   snow: { sun: [1.6, 22], sunCol: 0xe8eefa, sunI: 1.6, sky: 0xc0cfe0, ground: 0x9aa0a8, hemiI: 1.0, bg: 0xc9d4e0, fog: 0xc8d2de, night: 0, exposure: 0.9 },
   autumn: { sun: [0.5, 25], sunCol: 0xffd9a8, sunI: 3.0, sky: 0xa8c0e0, ground: 0x6b5a45, hemiI: 1.0, bg: 0xb8cce4, fog: 0xc8d4e0, night: 0, exposure: 1.0 },
@@ -286,6 +287,7 @@ const fakeRenderer = {
 };
 const game = { events, world, roadSurface: new RoadSurface(world), renderer: fakeRenderer, simDt: 0, dt: 0, time: 0, settings: { value: {} } } as unknown as Game;
 const roads = new RoadRenderer(game);
+(game as unknown as { roads: RoadRenderer }).roads = roads;
 const zones = new ZoneRenderer(game);
 roads.onWorldLoaded(world);
 zones.onWorldLoaded(world);
@@ -312,6 +314,12 @@ const views: Record<string, [THREE.Vector3, number, number, number]> = {
   top: [C(30.5, 58.5), 140, 0, 89],
   tram: [C(22, 38.5), 60, 30, 25],
   curve: [C(64, 80), 90, 330, 40],
+  zones: [C(16, 30), 260, 25, 52],
+  zones2: [C(70, 52), 230, 340, 50],
+  districts: [C(33, 42), 420, 15, 55],
+  tramclose: [C(37, 38.5), 38, 60, 32],
+  railclose: [C(60, 90.5), 30, 30, 30],
+  dirtclose: [C(88.5, 44), 34, 250, 32],
 };
 const [tgt, dist, azd, eld] = views[CAM] ?? views.overview;
 const azr = THREE.MathUtils.degToRad(azd), elr = THREE.MathUtils.degToRad(eld);
@@ -368,9 +376,9 @@ function frame() {
   renderer.render(scene, camera);
   frames++;
   if (frames % 10 === 0 || roads.stats.pending === 0) {
-    stats.textContent = `roads: chunks ${roads.stats.chunks} tris ${roads.stats.triangles} pending ${roads.stats.pending} build ${roads.stats.lastBuildMs.toFixed(1)}ms  draws ${renderer.info.render.calls}`;
+    stats.textContent = `zones: chunks ${zones.stats.chunks} cells ${zones.stats.cells} pending ${zones.stats.pending}  roads: chunks ${roads.stats.chunks} tris ${roads.stats.triangles} pending ${roads.stats.pending} build ${roads.stats.lastBuildMs.toFixed(1)}ms  draws ${renderer.info.render.calls}`;
   }
-  if (roads.stats.pending === 0 && frames > 3) (window as unknown as { __ready: boolean }).__ready = true;
+  if (roads.stats.pending === 0 && zones.stats.pending === 0 && frames > 3) (window as unknown as { __ready: boolean }).__ready = true;
 }
 frame();
 (window as unknown as Record<string, unknown>).__sb = { world, roads, zones, scene, camera, renderer };

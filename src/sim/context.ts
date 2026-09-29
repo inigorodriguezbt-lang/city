@@ -14,6 +14,7 @@ import { OutsideReach } from './reach';
 import { categoryUnlocked } from './catalog';
 import { SERVICE_GRACE_DAYS } from './tuning';
 import type { SimState } from './state';
+import { neutralPerks, type Perks } from './perks';
 
 /** Neutral event modifiers (kept local so the sim never depends on the events module at runtime). */
 export function neutralMods(): EventModifiers {
@@ -41,6 +42,8 @@ export type GracedService = 'garbage' | 'deathcare' | 'health' | 'education' | '
 export class SimContext {
   readonly rng: RNG;
   mods: EventModifiers = neutralMods();
+  /** city-wide perks of special service buildings (from the last full day) */
+  perks: Perks = neutralPerks();
   /** accumulators of the day in progress */
   agg = new DayAgg();
   /** last completed (full) day */

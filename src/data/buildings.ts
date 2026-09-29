@@ -732,55 +732,55 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'clock_tower', name: 'Clock Tower', icon: '🕰️', category: 'landmark', group: 'Historic',
     description: 'A 55 m campanile with four illuminated clock faces and a bronze bell that chimes the hours.',
-    w: 2, h: 2, cost: 110_000, upkeep: 1_200, unlock: 3, model: 'clock_tower', height: 56,
+    w: 2, h: 2, cost: 110_000, upkeep: 1_200, unlock: 7, model: 'clock_tower', height: 56,
     placement: { unique: true }, effects: [fx('tourism', 20, 90), fx('landValue', 14, 70)], attractiveness: 30, tags: ['landmark', 'clock', 'tower', 'bell', 'historic', 'unique'],
   },
   {
     id: 'lighthouse', name: 'Lighthouse', icon: '💡', category: 'landmark', group: 'Historic',
     description: 'A red-and-white striped lighthouse whose rotating beam sweeps the sea every night.',
-    w: 2, h: 2, cost: 115_000, upkeep: 1_100, unlock: 3, model: 'lighthouse', height: 44,
+    w: 2, h: 2, cost: 115_000, upkeep: 1_100, unlock: 7, model: 'lighthouse', height: 44,
     placement: { unique: true, shore: true }, effects: [fx('tourism', 22, 100), fx('landValue', 12, 60)], attractiveness: 30, tags: ['landmark', 'lighthouse', 'sea', 'beacon', 'coast', 'unique', 'shore'],
   },
   {
     id: 'city_gate', name: 'City Gate Arch', icon: '⛩️', category: 'landmark', group: 'Historic',
     description: 'A triumphal arch of carved stone welcoming visitors to the city. Traffic may pass beneath its vault.',
-    w: 3, h: 2, cost: 140_000, upkeep: 1_000, unlock: 4, model: 'city_gate', height: 36,
+    w: 3, h: 2, cost: 140_000, upkeep: 1_000, unlock: 7, model: 'city_gate', height: 36,
     placement: { unique: true }, effects: [fx('tourism', 24, 110), fx('landValue', 14, 70)], attractiveness: 35, tags: ['landmark', 'arch', 'gate', 'triumph', 'unique'],
   },
   {
     id: 'castle', name: 'Hilltop Castle', icon: '🏰', category: 'landmark', group: 'Historic',
     description: 'Curtain walls, round towers and a mighty keep. Loves a hilltop, and tourists love it back.',
-    w: 5, h: 5, cost: 260_000, upkeep: 3_000, unlock: 4, model: 'castle', height: 46, jobs: 30,
+    w: 5, h: 5, cost: 260_000, upkeep: 3_000, unlock: 7, model: 'castle', height: 46, jobs: 30,
     placement: { unique: true, maxSlope: 0.6 }, effects: [fx('tourism', 34, 180), fx('landValue', 16, 70)], attractiveness: 40, tags: ['landmark', 'castle', 'medieval', 'historic', 'unique'],
   },
   {
     id: 'grand_hotel', name: 'Grand Hotel', icon: '🛎️', category: 'landmark', group: 'Culture',
     description: 'A Belle Époque palace hotel with a green copper mansard, a ballroom and a doorman in white gloves.',
-    w: 3, h: 3, cost: 180_000, upkeep: 2_600, unlock: 5, model: 'grand_hotel', height: 42, jobs: 120,
+    w: 3, h: 3, cost: 180_000, upkeep: 2_600, unlock: 7, model: 'grand_hotel', height: 42, jobs: 120,
     placement: { unique: true }, effects: [fx('tourism', 28, 150), fx('landValue', 16, 90)], attractiveness: 30, tags: ['landmark', 'hotel', 'luxury', 'historic', 'unique'],
   },
   {
     id: 'art_museum', name: 'Art Museum', icon: '🖼️', category: 'landmark', group: 'Culture',
     description: 'A deconstructivist gallery of titanium curves housing masterpieces from every age.',
-    w: 4, h: 3, cost: 220_000, upkeep: 3_400, unlock: 5, model: 'art_museum', height: 30, jobs: 70,
+    w: 4, h: 3, cost: 220_000, upkeep: 3_400, unlock: 8, model: 'art_museum', height: 30, jobs: 70,
     placement: { unique: true }, effects: [fx('tourism', 30, 170), fx('education', 20, 60), fx('landValue', 16, 90)], attractiveness: 35, tags: ['landmark', 'museum', 'art', 'gallery', 'culture', 'unique'],
   },
   {
     id: 'observation_tower', name: 'Iron Observation Tower', icon: '🗼', category: 'landmark', group: 'Towers',
     description: 'A 160 m wrought-iron lattice tower with three viewing platforms. Sparkles with lights on the hour.',
-    w: 3, h: 3, cost: 190_000, upkeep: 2_200, unlock: 6, model: 'observation_tower', height: 162, jobs: 30,
+    w: 3, h: 3, cost: 190_000, upkeep: 2_200, unlock: 8, model: 'observation_tower', height: 162, jobs: 30,
     placement: { unique: true }, effects: [fx('tourism', 34, 180), fx('landValue', 16, 80)], attractiveness: 40, tags: ['landmark', 'tower', 'iron', 'lattice', 'view', 'unique'],
   },
   {
     id: 'planetarium', name: 'Planetarium', icon: '🔭', category: 'landmark', group: 'Culture',
     description: 'A silver dome projecting the night sky, with an observatory telescope on the terrace.',
-    w: 3, h: 3, cost: 200_000, upkeep: 2_800, unlock: 6, model: 'planetarium', height: 26, jobs: 40,
+    w: 3, h: 3, cost: 200_000, upkeep: 2_800, unlock: 8, model: 'planetarium', height: 26, jobs: 40,
     placement: { unique: true }, effects: [fx('tourism', 26, 130), fx('education', 22, 90), fx('landValue', 12, 60)], attractiveness: 30, tags: ['landmark', 'planetarium', 'stars', 'space', 'science', 'unique'],
   },
   {
     id: 'casino', name: 'Casino Royale', icon: '🎰', category: 'landmark', group: 'Sports & Entertainment',
     description: 'Neon, fountains and a golden tower. The house always wins — and so do your tourism numbers.',
-    w: 4, h: 3, cost: 260_000, upkeep: 3_600, unlock: 6, model: 'casino', height: 60, jobs: 180,
+    w: 4, h: 3, cost: 260_000, upkeep: 3_600, unlock: 8, model: 'casino', height: 60, jobs: 180,
     placement: { unique: true }, effects: [fx('tourism', 32, 190), fx('noise', 8, 60), fx('crime', 10, 30)], attractiveness: 25, tags: ['landmark', 'casino', 'neon', 'nightlife', 'unique'],
   },
   {
@@ -822,7 +822,7 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'central_station', name: 'Central Station', icon: '🚆', category: 'landmark', group: 'Culture',
     description: 'A monumental terminus with an arched iron-and-glass train shed and a clock-faced stone facade. Needs a railway alongside.',
-    w: 6, h: 4, cost: 450_000, upkeep: 5_500, unlock: 8, model: 'central_station', height: 40, jobs: 120,
+    w: 6, h: 4, cost: 450_000, upkeep: 5_500, unlock: 9, model: 'central_station', height: 40, jobs: 120,
     vehicles: { type: 'train', count: 4 }, placement: { unique: true, rail: true },
     effects: [fx('transit', 28, 255), fx('tourism', 30, 140), fx('landValue', 16, 70)], attractiveness: 25, tags: ['landmark', 'station', 'train', 'rail', 'transit', 'unique'],
   },
@@ -835,7 +835,7 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'tv_tower', name: 'TV Tower', icon: '📺', category: 'landmark', group: 'Towers',
     description: 'A 365 m concrete shaft crowned by a steel sphere with a revolving restaurant. Broadcasts to the whole region.',
-    w: 2, h: 2, cost: 350_000, upkeep: 3_800, unlock: 8, model: 'tv_tower', height: 365, jobs: 40,
+    w: 2, h: 2, cost: 350_000, upkeep: 3_800, unlock: 9, model: 'tv_tower', height: 365, jobs: 40,
     placement: { unique: true }, effects: [fx('tourism', 40, 200), fx('happiness', 40, 25), fx('landValue', 14, 60)], attractiveness: 40, tags: ['landmark', 'tower', 'tv', 'broadcast', 'view', 'unique'],
   },
   {

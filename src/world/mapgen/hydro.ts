@@ -4,13 +4,16 @@
 //  1. cutDesignedRivers – a gentle monotone trench along each designed river
 //     centre line so the main river follows the hand-designed meanders.
 //  2. fillMinorDepressions – vertex-level Priority-Flood; closed depressions
-//     too small/shallow to be lakes are filled flat, the rest are kept.
+//     too small/shallow to be lakes (or beyond the theme's lake count/area
+//     budget, or inside the start core) are filled flat, the rest are kept.
 //  3. buildWater – ocean (below sea level & connected to the edge), lakes
 //     (filled depressions that pass area/depth thresholds scaled by the water
 //     slider), flow accumulation incl. off-map catchments of designed rivers,
-//     river channels with a monotone (non-increasing downstream) water surface,
-//     width/depth growing with log discharge, carved into the terrain, and a
-//     one-ring surface extension so renderers can draw continuous shorelines.
+//     river channels with a monotone (non-increasing downstream) water surface
+//     whose per-cell drop is capped (steep reaches incise into gorges/rapids,
+//     over-incised lake outlets lower their lake), width/depth growing with
+//     log discharge, carved into the terrain, and a one-ring surface extension
+//     so renderers can draw continuous shorelines.
 // ─────────────────────────────────────────────────────────────────────────────
 import { WATER_EPS } from '../../core/constants';
 import type { GenContext } from './context';
@@ -60,6 +63,23 @@ function lakeBudget(ctx: GenContext): number {
     default: n = 0.8 + 3.4 * w; break;
   }
   return Math.round(n * area);
+}
+
+/**
+ * Share of the map natural lakes may cover in total, and the largest share a
+ * single natural lake may take (bigger basins are filled into flat valley
+ * floors / bogs instead of swallowing the landscape).
+ */
+function lakeAreaShare(ctx: GenContext): { total: number; single: number } {
+  const w = ctx.params.water;
+  switch (ctx.params.theme.id) {
+    case 'boreal': return { total: 0.05 + 0.1 * w, single: 0.012 + 0.016 * w };
+    case 'alpine': return { total: 0.012 + 0.03 * w, single: 0.012 + 0.012 * w };
+    case 'desert': return { total: 0, single: 0 };
+    case 'mediterranean': return { total: 0.004 + 0.016 * w, single: 0.008 + 0.01 * w };
+    case 'tropical': return { total: 0.003 + 0.012 * w, single: 0.006 + 0.008 * w };
+    default: return { total: 0.008 + 0.026 * w, single: 0.012 + 0.014 * w };
+  }
 }
 
 /** True if grid node (x, y) on a w×w grid lies inside a designed lake basin. */
@@ -259,7 +279,9 @@ export function fillMinorDepressions(ctx: GenContext, scale = 1, budget = 1): vo
   const q = new IntQueue(4096);
   // collect depressions; members stored contiguously
   const members: number[] = [];
-  const comps: { start: number; end: number; depth: number; designed: boolean; score: number }[] = [];
+  const comps: { start: number; end: number; depth: number; designed: boolean; core: number; score: number }[] = [];
+  const L = ctx.layout;
+  const coreR = L.buildRadius * 0.5;
   for (let s = 0; s < n; s++) {
     if (seen[s] || !g.raised[s] || (ocean && ocean[s])) continue;
     const start = members.length;
@@ -268,6 +290,7 @@ export function fillMinorDepressions(ctx: GenContext, scale = 1, budget = 1): vo
     q.push(s);
     let maxDepth = 0;
     let designed = false;
+    let core = 0;
     while (q.length) {
       const i = q.shift();
       members.push(i);
@@ -275,6 +298,7 @@ export function fillMinorDepressions(ctx: GenContext, scale = 1, budget = 1): vo
       if (dd > maxDepth) maxDepth = dd;
       const x = i % V, y = (i / V) | 0;
       if (!designed && dd > 1 && inDesignedLake(ctx, x, y, V)) designed = true;
+      if (Math.hypot(x - L.startX, y - L.startY) < coreR) core++;
       for (let k = 0; k < 8; k++) {
         const nx = x + N8_DX[k], ny = y + N8_DY[k];
         if (nx < 0 || ny < 0 || nx >= V || ny >= V) continue;
@@ -285,11 +309,24 @@ export function fillMinorDepressions(ctx: GenContext, scale = 1, budget = 1): vo
       }
     }
     const area = members.length - start;
-    comps.push({ start, end: members.length, depth: maxDepth, designed, score: Math.sqrt(maxDepth * area) });
+    comps.push({ start, end: members.length, depth: maxDepth, designed, core: core / area, score: Math.sqrt(maxDepth * area) });
   }
-  // keep designed lakes plus the best natural candidates within the theme budget
-  const cand = comps.filter((c) => !c.designed && c.depth >= dMin && c.end - c.start >= aMin).sort((a, b) => b.score - a.score);
-  const keep = new Set(cand.slice(0, Math.max(0, Math.round(lakeBudget(ctx) * budget))));
+  // keep designed lakes plus the best natural candidates within the theme's
+  // lake count and area budgets; basins in the start core are always filled
+  const share = lakeAreaShare(ctx);
+  const areaBudget = share.total * n * budget;
+  const maxArea = share.single * n;
+  const cand = comps.filter((c) => !c.designed && c.core < 0.25 && c.depth >= dMin && c.end - c.start >= aMin && c.end - c.start <= maxArea).sort((a, b) => b.score - a.score);
+  const keep = new Set<(typeof comps)[number]>();
+  const maxCount = Math.max(0, Math.round(lakeBudget(ctx) * budget));
+  let used = 0;
+  for (const c of cand) {
+    if (keep.size >= maxCount) break;
+    const area = c.end - c.start;
+    if (used + area > areaBudget) continue;
+    used += area;
+    keep.add(c);
+  }
   for (const c of comps) {
     if (c.designed || keep.has(c)) continue;
     for (let k = c.start; k < c.end; k++) h[members[k]] = F[members[k]];
@@ -356,6 +393,9 @@ export function buildWater(ctx: GenContext, report: (f: number) => void): void {
   // ── lakes: connected raised regions sharing one spill level ──────────────
   const { depth: dMin, area: aMin } = lakeThresholds(ctx);
   const lakeLevel = new Float32Array(nC).fill(NaN);
+  /** lake component id per cell (-1 = none) and each lake's surface level */
+  const lakeId = new Int32Array(nC).fill(-1);
+  const lakeLv: number[] = [];
   {
     const seen = new Uint8Array(nC);
     const q = new IntQueue(4096);
@@ -386,8 +426,11 @@ export function buildWater(ctx: GenContext, report: (f: number) => void): void {
         }
       }
       if (designed || (maxDepth >= dMin * 0.5 && comp.length >= aMin * 0.5)) {
+        const id = lakeLv.length;
+        lakeLv.push(level);
         for (const i of comp) {
           lakeLevel[i] = level;
+          lakeId[i] = id;
           kind[i] = WK_LAKE;
         }
       }
@@ -533,33 +576,67 @@ export function buildWater(ctx: GenContext, report: (f: number) => void): void {
     passUp();
   }
   // gorge pass (outlets upstream): bound the per-cell surface drop so water
-  // stays continuous — knickpoints become short incised gorges. Small streams
-  // that would still tumble down steep slopes stay dry rocky gullies until the
-  // gradient eases, so every wet channel flows continuously to its outlet.
+  // stays continuous — knickpoints become short incised gorges and no link
+  // drops more than MAX_RAPID (steep reaches become rapids, never waterfalls).
+  // Small streams that would still tumble down steep slopes stay dry rocky
+  // gullies until the gradient eases, so every wet channel flows continuously
+  // to its outlet.
+  const MAX_RAPID = 2.2;
   const flowing = new Uint8Array(nC);
-  for (let q = 0; q < nC; q++) {
-    const c = order[q];
-    if (center[c] !== 1) continue;
-    const r = rec[c];
-    let base = NaN;
-    let ok = 1;
-    if (r >= 0) {
-      if (center[r] === 1) {
-        base = S[r];
-        ok = flowing[r];
-      } else if (ocean[r]) base = sea;
-      else if (kind[r] === WK_LAKE) base = lakeLevel[r];
+  const gorgePass = () => {
+    for (let q = 0; q < nC; q++) {
+      const c = order[q];
+      if (center[c] !== 1) continue;
+      const r = rec[c];
+      let base = NaN;
+      let ok = 1;
+      if (r >= 0) {
+        if (center[r] === 1) {
+          base = S[r];
+          ok = flowing[r];
+        } else if (ocean[r]) base = sea;
+        else if (kind[r] === WK_LAKE) base = lakeLevel[r];
+      }
+      if (Number.isNaN(base)) {
+        flowing[c] = 1;
+        continue;
+      }
+      const major = ratio(c) > 6;
+      const maxDrop = major ? 0.55 : 0.9;
+      const deepest = F[c] - freeboard(c) - (major ? 6 : 2.5);
+      const lim = Math.min(Math.max(base + maxDrop, deepest), base + MAX_RAPID);
+      if (S[c] > lim) S[c] = lim;
+      flowing[c] = major || (ok && S[c] - base <= 1.3) ? 1 : 0;
     }
-    if (Number.isNaN(base)) {
-      flowing[c] = 1;
-      continue;
+  };
+  gorgePass();
+  // a lake whose outlet had to incise far below its spill level drains down
+  // to just above the outlet (the sill is cut); its inflows are then re-graded.
+  // Draining one lake can deepen the valley feeding it from a lake upstream,
+  // so this repeats until every outlet sits within MAX_RAPID of its lake.
+  if (lakeLv.length > 0) {
+    const outMin = new Float32Array(lakeLv.length);
+    for (let round = 0; round < 8; round++) {
+      outMin.fill(Infinity);
+      // an outlet is any wet channel cell that receives flow from a lake cell
+      for (let j = 0; j < nC; j++) {
+        const id = lakeId[j];
+        if (id < 0) continue;
+        const r = rec[j];
+        if (r < 0 || lakeId[r] === id || center[r] !== 1 || !flowing[r]) continue;
+        if (S[r] < outMin[id]) outMin[id] = S[r];
+      }
+      let lowered = false;
+      for (let id = 0; id < lakeLv.length; id++) {
+        if (outMin[id] < lakeLv[id] - MAX_RAPID) {
+          lakeLv[id] = outMin[id] + MAX_RAPID * 0.8;
+          lowered = true;
+        }
+      }
+      if (!lowered) break;
+      for (let i = 0; i < nC; i++) if (lakeId[i] >= 0) lakeLevel[i] = lakeLv[lakeId[i]];
+      gorgePass();
     }
-    const major = ratio(c) > 6;
-    const maxDrop = major ? 0.55 : 0.9;
-    const deepest = F[c] - freeboard(c) - (major ? 6 : 2.5);
-    const lim = Math.max(base + maxDrop, deepest);
-    if (S[c] > lim) S[c] = lim;
-    flowing[c] = major || (ok && S[c] - base <= 1.3) ? 1 : 0;
   }
   for (let c = 0; c < nC; c++) if (center[c] === 1 && !flowing[c]) center[c] = 2;
   report(0.62);
@@ -677,11 +754,31 @@ export function buildWater(ctx: GenContext, report: (f: number) => void): void {
   water.fill(DRY);
   for (let i = 0; i < nC; i++) {
     if (ocean[i]) water[i] = sea;
-    else if (kind[i] === WK_LAKE) water[i] = lakeLevel[i];
-    else if (!Number.isNaN(chS[i]) && chS[i] > DRY) {
+    else if (kind[i] === WK_LAKE) {
+      if (lakeLevel[i] > Zc[i] + WATER_EPS) water[i] = lakeLevel[i];
+      else kind[i] = WK_DRY;
+    } else if (!Number.isNaN(chS[i]) && chS[i] > DRY) {
       water[i] = chS[i];
       kind[i] = WK_RIVER;
     } else if (wash[i] || (!Number.isNaN(chB[i]) && chS[i] === DRY)) kind[i] = WK_WASH;
+  }
+  // bank cells of wide channels on steep reaches were stamped from centres a
+  // few links apart; pull any that stand well above a wet neighbour down so
+  // the rendered surface stays continuous (channel centres never move)
+  for (let it = 0; it < 2; it++) {
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const i = y * size + x;
+        if (kind[i] !== WK_RIVER || center[i] === 1) continue;
+        const wi = water[i];
+        let lo = Infinity;
+        if (x > 0 && water[i - 1] > Zc[i - 1] + WATER_EPS && water[i - 1] < lo) lo = water[i - 1];
+        if (x < size - 1 && water[i + 1] > Zc[i + 1] + WATER_EPS && water[i + 1] < lo) lo = water[i + 1];
+        if (y > 0 && water[i - size] > Zc[i - size] + WATER_EPS && water[i - size] < lo) lo = water[i - size];
+        if (y < size - 1 && water[i + size] > Zc[i + size] + WATER_EPS && water[i + size] < lo) lo = water[i + size];
+        if (wi > lo + MAX_RAPID) water[i] = lo + MAX_RAPID;
+      }
+    }
   }
   // ring 1: 4-neighbours of water bodies take the (lowest) adjacent surface
   const ring = new Float32Array(nC).fill(DRY);

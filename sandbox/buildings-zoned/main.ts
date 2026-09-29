@@ -14,6 +14,7 @@ import { buildZoned, schedFor } from '../../src/render/buildings/zoned';
 import { mergeDetail, mergeLod, type MergeItem, type LodItem } from '../../src/render/buildings/zoned/merge';
 import { buildGlowMesh, updateGlow, type WorldLight } from '../../src/render/buildings/zoned/glow';
 import { Cond, STYLE_INDEX, packInfo } from '../../src/render/buildings/zoned/constants';
+import { constructionModel, rubbleModel, weatherModel } from '../../src/render/buildings/zoned/states';
 
 const q = new URLSearchParams(location.search);
 const zoneIds = (q.get('zones') ?? 'res_low') === 'all' ? ZONES.map((z) => z.id) : (q.get('zones') ?? 'res_low').split(',');
@@ -63,6 +64,41 @@ if (q.get('test') === '1') {
   }
   heavy.sort((a, b) => b[0] - a[0]);
   (window as unknown as { __report: unknown }).__report = { n, rows, errs: errs.slice(0, 40), nErr: errs.length, heavy: heavy.slice(0, 6) };
+  throw new Error('test done');
+}
+
+// ?test=2 → time full / construction / rubble / weathered variants per zone (warm runs)
+if (q.get('test') === '2') {
+  const rows: string[] = [];
+  for (let pass = 0; pass < 2; pass++) {
+    rows.length = 0;
+    for (const zd of ZONES) {
+      const acc = { full: 0, cons: 0, rubble: 0, weather: 0, n: 0 };
+      let worst = 0, worstKey = '';
+      for (const sd of STYLES) for (const lv of [2, 5]) {
+        const lot = zd.lots[zd.lots.length - 1];
+        const seed = hash2(lv * 31 + lot[0], STYLE_INDEX[sd.id] ?? 0);
+        const ctx = { b: null, width: lot[0] * 16, depth: lot[1] * 16, level: lv, zone: zd.type, style: sd, theme, rng: new RNG(seed), detail: 'high' as const };
+        let t = performance.now();
+        const full = buildZoned(ctx);
+        const tf = performance.now() - t;
+        acc.full += tf;
+        if (tf > worst) { worst = tf; worstKey = `${sd.id}/L${lv}`; }
+        t = performance.now();
+        constructionModel(full, { ...ctx, rng: new RNG(seed + 1) }, 0.55);
+        acc.cons += performance.now() - t;
+        t = performance.now();
+        rubbleModel(full, { ...ctx, rng: new RNG(seed + 2) });
+        acc.rubble += performance.now() - t;
+        t = performance.now();
+        weatherModel(full, 'abandoned');
+        acc.weather += performance.now() - t;
+        acc.n++;
+      }
+      rows.push(`${zd.id}: full ${(acc.full / acc.n).toFixed(2)} (worst ${worst.toFixed(1)} ${worstKey}) cons ${(acc.cons / acc.n).toFixed(2)} rubble ${(acc.rubble / acc.n).toFixed(2)} weather ${(acc.weather / acc.n).toFixed(2)} ms`);
+    }
+  }
+  (window as unknown as { __report: unknown }).__report = rows;
   throw new Error('test done');
 }
 
@@ -137,19 +173,28 @@ const ROAD = 16;
 let zRow = 0;
 let totalW = 0;
 const rowsInfo: string[] = [];
+// rows of lots along a street: layout=bystyle → one row per (zone, style) with
+// levels as columns; layout=bylevel (default) → one row per (zone, level) with styles as columns
+const layout = q.get('layout') ?? 'bylevel';
+const rowDefs: { zid: string; cells: { sid: string; level: number; i: number }[] }[] = [];
 for (const zid of zoneIds) {
-  const zd = zoneById(zid)!;
-  for (const sid of styleIds) {
-    // lot size per column
+  if (layout === 'bystyle') for (const sid of styleIds) rowDefs.push({ zid, cells: levels.map((level, i) => ({ sid, level, i })) });
+  else levels.forEach((level, i) => rowDefs.push({ zid, cells: styleIds.map((sid) => ({ sid, level, i })) }));
+}
+for (const row of rowDefs) {
+  const zd = zoneById(row.zid)!;
+  {
     let x = 0;
     let rowDepth = 0;
-    const lots: { lw: number; ld: number; level: number }[] = [];
-    levels.forEach((lv, i) => {
-      const lot = lotArg ? lotArg.split('x').map(Number) : zd.lots[Math.min(zd.lots.length - 1, Math.floor(((lv - 1) / 4) * zd.lots.length + (i % 2) * 0.5))];
-      lots.push({ lw: lot[0] * 16, ld: lot[1] * 16, level: lv });
+    const lots: { lw: number; ld: number; level: number; sid: string }[] = [];
+    for (const c of row.cells) {
+      const lv = c.level;
+      const lot = lotArg ? lotArg.split('x').map(Number) : zd.lots[Math.min(zd.lots.length - 1, Math.floor(((lv - 1) / 4) * zd.lots.length + (c.i % 2) * 0.5))];
+      lots.push({ lw: lot[0] * 16, ld: lot[1] * 16, level: lv, sid: c.sid });
       rowDepth = Math.max(rowDepth, lot[1] * 16);
-    });
+    }
     for (const l of lots) {
+      const sid = l.sid;
       const seed = hash2(seed0 * 7919 + l.level * 131, hash2(STYLE_INDEX[sid] ?? 0, zd.type));
       const ctx = {
         b: null, width: l.lw, depth: l.ld, level: l.level, zone: zd.type as ZoneType, style: styleDef(sid as StyleId), theme,
@@ -173,7 +218,7 @@ for (const zid of zoneIds) {
     }
     roads.push([-8, x + 4, zRow + rowDepth, zRow + rowDepth + ROAD]);
     totalW = Math.max(totalW, x);
-    rowsInfo.push(`${zid} ${sid}`);
+    rowsInfo.push(`${row.zid}`);
     zRow += rowDepth + ROAD + 6;
   }
 }
@@ -233,8 +278,8 @@ const cx = totalW / 2, cz = zRow / 2;
 const span = Math.max(totalW, zRow);
 const camArg = q.get('cam') ?? 'overview';
 if (camArg === 'overview') {
-  camera.position.set(cx + span * 0.35, span * 0.55 + maxH * 0.6, cz + span * 0.75);
-  camera.lookAt(cx, maxH * 0.15, cz);
+  camera.position.set(cx + totalW * 0.08, span * 0.42 + maxH * 0.55, zRow + span * 0.42);
+  camera.lookAt(cx, maxH * 0.12, cz + zRow * 0.08);
 } else if (camArg === 'close') {
   camera.position.set(cx + 20, 35 + maxH * 0.5, zRow + 40);
   camera.lookAt(cx, maxH * 0.25, zRow - 40);

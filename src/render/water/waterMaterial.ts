@@ -134,16 +134,24 @@ export function createWaterMaterial(wu: WaterUniforms, shared: SharedUniforms, s
         vec2 wperp = vec2(-wdir.y, wdir.x);
         vec2 fl = vFlow;
         float t = uTime;
-        vec2 q = vec2(dot(wp, wdir), dot(wp, wperp));
-        vec2 uv1 = q / 34.0 - vec2(t * (0.018 + 0.03 * ws), 0.0) - fl * t * 0.05;
-        vec2 uv2 = vec2(q.x * 0.8 - q.y * 0.6, q.x * 0.6 + q.y * 0.8) / 11.0 - vec2(t * 0.045, t * 0.012) - fl * t * 0.12;
-        vec2 uv3 = q / 190.0 - vec2(t * 0.006, 0.0);
+        // low-frequency field: domain warp + gusty "cat's paw" patches break the tiling
+        vec4 mac = texture2D(uNoise, wp / 1300.0 + vec2(t * 0.0015, -t * 0.001));
+        vec4 mac2 = texture2D(uNoise, wp / 310.0 - vec2(t * 0.004, t * 0.002));
+        vec2 warp = (vec2(mac.g, mac2.r) - 0.5) * 14.0;
+        float gustAmp = 0.55 + 0.75 * smoothstep(0.25, 0.75, mac.r * 0.7 + mac2.a * 0.3);
+        vec2 q = vec2(dot(wp, wdir), dot(wp, wperp)) + warp;
+        vec2 uv1 = q / 37.0 - vec2(t * (0.018 + 0.03 * ws), 0.0) - fl * t * 0.05;
+        vec2 uv2 = vec2(q.x * 0.7986 - q.y * 0.6018, q.x * 0.6018 + q.y * 0.7986) / 12.3 - vec2(t * 0.045, t * 0.012) - fl * t * 0.12;
+        vec2 uv3 = vec2(q.x * 0.9397 + q.y * 0.342, -q.x * 0.342 + q.y * 0.9397) / 173.0 - vec2(t * 0.006, 0.0);
+        vec2 uv4 = vec2(q.x * 0.2588 - q.y * 0.9659, q.x * 0.9659 + q.y * 0.2588) / 4.7 - vec2(t * 0.09, -t * 0.03) - fl * t * 0.25;
         vec3 n1 = texture2D(uWaterNormal, uv1).xyz * 2.0 - 1.0;
         vec3 n2 = texture2D(uWaterNormal, uv2).xyz * 2.0 - 1.0;
         vec3 n3 = texture2D(uWaterNormal, uv3).xyz * 2.0 - 1.0;
-        vec2 sl = n1.xy * 0.55 + n2.xy * 0.4 + n3.xy * 0.6;
+        vec3 n4 = texture2D(uWaterNormal, uv4).xyz * 2.0 - 1.0;
+        float nearDetail = 1.0 - smoothstep(40.0, 260.0, camDist);
+        vec2 sl = n1.xy * 0.55 + n2.xy * 0.38 + n3.xy * 0.55 + n4.xy * 0.3 * nearDetail;
         sl = vec2(dot(sl, vec2(wdir.x, wperp.x)), dot(sl, vec2(wdir.y, wperp.y)));
-        float amp = mix(0.18, 0.75, ws);
+        float amp = mix(0.18, 0.75, ws) * gustAmp;
         #ifndef WATER_SEA
           amp *= 0.55 + 0.6 * clamp(length(fl) * 3.0, 0.0, 1.0);
         #endif
@@ -173,6 +181,12 @@ export function createWaterMaterial(wu: WaterUniforms, shared: SharedUniforms, s
           foam = max(foam, crest * 0.7 * (1.0 - smoothstep(400.0, 2500.0, camDist)));
         #endif
         foam *= 1.0 - smoothstep(900.0, 3000.0, camDist) * 0.6;
+        // playable border (continues the line drawn on the terrain)
+        vec2 bdd = max(max(-wp, wp - uMapSize), 0.0);
+        float bIn = min(min(wp.x, wp.y), min(uMapSize - wp.x, uMapSize - wp.y));
+        float bsd = length(bdd) > 0.0 ? length(bdd) : -bIn;
+        float blw = max(2.5, camDist * 0.0018);
+        float borderLine = exp(-(bsd * bsd) / (blw * blw));
         diffuseColor.rgb = mix(wcol, vec3(0.92, 0.95, 0.97), foam);
         float wA = clamp(1.0 - exp(-depth * 0.65), 0.0, 1.0);
         wA = max(wA, foam * 0.95);
@@ -188,7 +202,9 @@ export function createWaterMaterial(wu: WaterUniforms, shared: SharedUniforms, s
         /* glsl */ `
         float fres = pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 5.0);
         float aOut = clamp(max(wA, fres * 0.9), 0.0, 1.0);
-        gl_FragColor = vec4(totalDiffuse * aOut + min(totalSpecular, vec3(6.0)) + totalEmissiveRadiance, aOut);
+        vec3 borderGlow = vec3(1.0, 0.9, 0.7) * borderLine * 0.22 * (1.0 - uNight * 0.75);
+        aOut = max(aOut, borderLine * 0.5);
+        gl_FragColor = vec4(totalDiffuse * aOut + min(totalSpecular, vec3(6.0)) + totalEmissiveRadiance + borderGlow, aOut);
         `,
       )
       .replace(

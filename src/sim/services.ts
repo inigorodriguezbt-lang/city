@@ -8,11 +8,13 @@ import { LotSample, sampleUtilities } from './lot';
 import { bsim } from './state';
 import { budgetCategoryOf, defOf, isCrematorium, isGarbageProcessor, isRenewable } from './catalog';
 import { eduShareOf } from './zonemeta';
-import { GARBAGE_PROBLEM, finish, handleGarbage, updateRubble } from './lifecycle';
+import { GARBAGE_PROBLEM, applyUtilityFlags, finish, handleGarbage, updateRubble } from './lifecycle';
 import {
-  CEMETERY_INTAKE_PER_VEHICLE, DEFAULT_ATTRACTION, LANDFILL_INTAKE_PER_VEHICLE, NO_ROAD_GRACE_DAYS, STAFF_FLOOR, UTILITY_GRACE_DAYS,
+  BASE_BIRTH_RATE, BASE_MORTALITY, CEMETERY_INTAKE_PER_VEHICLE, DEFAULT_ATTRACTION, HOUSEHOLD_SIZE, LANDFILL_INTAKE_PER_VEHICLE, LEVEL_TAX,
+  NO_ROAD_GRACE_DAYS, SENIOR_SHARE, STAFF_FLOOR, STUDENT_SHARE, TAX_BASE, TAX_COMFORT, UTILITY_GRACE_DAYS, WORKFORCE_SHARE,
 } from './tuning';
 import { DAYS_PER_MONTH } from '../core/constants';
+import { PERKS } from './perks';
 
 const VISUAL_FLAGS = BFlag.Powered | BFlag.Abandoned | BFlag.UnderConstruction | BFlag.Upgrading | BFlag.Collapsed | BFlag.Burned;
 const sample = new LotSample();
@@ -34,6 +36,83 @@ export function attractionOf(def: BuildingDef): number {
   if (def.effects) for (const e of def.effects) if (e.field === 'tourism' && e.amount > 0) a += e.amount * 0.5;
   a += (def.attractiveness ?? 0) * 0.2;
   return a;
+}
+
+/** true when the building needs running water and sewage to operate properly */
+export function needsWater(def: BuildingDef): boolean {
+  return NEEDS_WATER.has(def.category) || isHousing(def);
+}
+
+/** Wonders that house citizens (the arcology): capacity is measured in residents. */
+export function isHousing(def: BuildingDef): boolean {
+  return (def.category === 'monument' || def.category === 'landmark') && def.capacityLabel === 'residents' && (def.capacity ?? 0) > 0;
+}
+
+/**
+ * Residents of a housing wonder. It is self-contained (own schools, clinics and
+ * deathcare), so its people only draw on the city's jobs, shops and taxes.
+ */
+function stepHousing(ctx: SimContext, b: Building, def: BuildingDef, s: LotSample, k: number, eff: number): void {
+  const agg = ctx.agg, st = ctx.state, r = st.rates, e = ctx.policies.at(b);
+  const cap = def.capacity ?? 0;
+  b.maxResidents = cap;
+  let res = Math.min(b.residents, cap);
+  if (res > 0) {
+    const deaths = Math.min(res, ctx.stochasticRound((res * BASE_MORTALITY * k) / 360));
+    const births = ctx.stochasticRound((res * BASE_BIRTH_RATE * e.birthRate * k) / 360);
+    res += births - deaths;
+    agg.births += births;
+    agg.deaths += deaths;
+  }
+  const linked = !ctx.outside.hasConnections || ctx.outside.building(b);
+  const running = eff > 0 && s.road && !(b.flags & BFlag.OnFire);
+  if (running && linked && res < cap) {
+    // a huge building fills gradually, however strong the demand
+    const n = ctx.stochasticRound(Math.min(cap - res, cap * 0.004 * k * (0.3 + Math.max(0, r.moveIn) * 3)));
+    if (n > 0) {
+      b.education = (b.education * res + r.immigrantEdu * n) / (res + n);
+      res += n;
+      agg.movedIn += n;
+    }
+  }
+  if (res > 0) {
+    const leave = running ? r.emigrate * 0.5 : 0.05;
+    const out = Math.min(res, ctx.stochasticRound(res * Math.min(0.5, leave * k)));
+    res -= out;
+    agg.movedOut += out;
+  }
+  if (res > cap) {
+    agg.movedOut += res - cap;
+    res = cap;
+  }
+  b.residents = res;
+  b.visitors = res;
+  // wellbeing: the wonder's own facilities keep people healthy, educated and content
+  const t = ctx.world.economy.taxes.resHigh;
+  const happyTarget = Math.max(0, Math.min(100, 78 + ctx.mods.happiness + e.happinessRes - Math.max(0, t - TAX_COMFORT) * 140 - (running ? 0 : 25)));
+  b.happiness += (happyTarget - b.happiness) * Math.min(1, 0.25 * k);
+  b.health += (85 - b.health) * Math.min(1, 0.12 * k);
+  b.education += (Math.max(r.immigrantEdu, 76) - b.education) * Math.min(1, 0.01 * k);
+  // city aggregates
+  agg.population += res;
+  agg.households += Math.ceil(res / HOUSEHOLD_SIZE);
+  agg.resCap += cap;
+  agg.resVacant += cap - res;
+  const wf = res * WORKFORCE_SHARE;
+  agg.workforce += wf;
+  agg.educatedWorkforce += wf * Math.min(1, (b.education / 100) * 1.15);
+  agg.seniors += res * SENIOR_SHARE;
+  // pupils attend the wonder's own academies (not counted against city schools)
+  agg.studentsAll += res * STUDENT_SHARE;
+  if (linked) agg.outsidePop += res;
+  agg.buyingPower += res * 1.4 * (0.85 + b.happiness / 400);
+  agg.weight += res;
+  agg.happySum += b.happiness * res;
+  agg.healthSum += b.health * res;
+  agg.eduSum += b.education * res;
+  agg.eduWeight += res;
+  // residents pay high-density residential taxes at level-5 rates
+  agg.taxBase.resHigh += (res * TAX_BASE.resHigh * LEVEL_TAX[5] * e.income.resHigh * 10) / DAYS_PER_MONTH;
 }
 
 /** true when the building needs grid power to operate at full efficiency */
@@ -59,12 +138,7 @@ export function updateService(ctx: SimContext, b: Building, k: number): void {
   }
   const s = sample;
   sampleUtilities(w, b, s);
-  let flags = b.flags & ~(BFlag.Powered | BFlag.Watered | BFlag.Sewered | BFlag.RoadAccess);
-  if (s.power) flags |= BFlag.Powered;
-  if (s.water) flags |= BFlag.Watered;
-  if (s.sewage) flags |= BFlag.Sewered;
-  if (s.road) flags |= BFlag.RoadAccess;
-  b.flags = flags;
+  applyUtilityFlags(b, s);
   const e = ctx.policies.at(b);
   bs.pm = e.power;
   bs.wm = e.water;
@@ -78,7 +152,8 @@ export function updateService(ctx: SimContext, b: Building, k: number): void {
 
   // ── construction ───────────────────────────────────────────────────────
   if (b.built < 1) {
-    b.built = Math.min(1, b.built + (k * Math.max(0.05, ctx.mods.constructionMult)) / serviceBuildDays(def));
+    // creative mode builds instantly
+    b.built = w.creative ? 1 : Math.min(1, b.built + (k * Math.max(0.05, ctx.mods.constructionMult)) / serviceBuildDays(def));
     if (b.built < 1) {
       b.flags |= BFlag.UnderConstruction;
       b.problems = 0;
@@ -123,6 +198,7 @@ export function updateService(ctx: SimContext, b: Building, k: number): void {
   if (!s.road && def.placement?.road !== false && def.placement?.onWater !== true) eff *= 0.6;
   eff = Math.round(Math.max(0, Math.min(1.5, eff)) * 100) / 100;
   b.efficiency = eff;
+  if (PERKS[def.id]) agg.perks.add(def.id, eff);
 
   // ── capacity & category bookkeeping ────────────────────────────────────
   const capacity = def.capacity ?? 0;
@@ -199,7 +275,8 @@ export function updateService(ctx: SimContext, b: Building, k: number): void {
       }
       break;
   }
-  const attraction = attractionOf(def);
+  // tourism multipliers of the building's district (city-wide policies included)
+  const attraction = attractionOf(def) * e.tourism;
   if (attraction > 0) {
     agg.attraction += attraction * Math.min(1, eff);
     if (def.category === 'tourism' || def.category === 'landmark' || def.category === 'monument') b.visitors = Math.round(attraction * eff * 0.6);
@@ -207,6 +284,8 @@ export function updateService(ctx: SimContext, b: Building, k: number): void {
   if (def.category !== 'garbage' && def.category !== 'deathcare' && def.category !== 'health' && def.category !== 'education' && attraction <= 0) {
     b.visitors = Math.round(b.workers * 0.2);
   }
+
+  if (isHousing(def)) stepHousing(ctx, b, def, s, k, eff);
 
   // ── upkeep (per day at 100 % budget; disabled buildings cost a quarter) ─
   agg.upkeepBase[budgetCat] = (agg.upkeepBase[budgetCat] ?? 0) + (def.upkeep / DAYS_PER_MONTH) * (disabled ? 0.25 : 1);
@@ -216,7 +295,7 @@ export function updateService(ctx: SimContext, b: Building, k: number): void {
     bs.np += k;
     if (bs.np >= 2) p |= Problem.NoPower;
   } else bs.np = 0;
-  if (NEEDS_WATER.has(cat)) {
+  if (needsWater(def)) {
     if (!s.water) {
       bs.nw += k;
       if (bs.nw >= 2) p |= Problem.NoWater;

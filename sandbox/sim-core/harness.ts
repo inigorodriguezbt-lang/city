@@ -13,6 +13,7 @@ import { BUILDINGS, buildingDef } from '../../src/data/buildings';
 import { powerUse, waterUse, sewageUse } from '../../src/sim/consumption';
 import { MILESTONES } from '../../src/data/milestones';
 import { CATS } from '../../src/sim/candidates';
+import { hashFloat } from '../../src/core/rng';
 
 const argv = typeof process !== 'undefined' ? process.argv.slice(2) : [];
 const YEARS = Number(argv.find((a) => /^\d+$/.test(a)) ?? 12);
@@ -68,27 +69,35 @@ function roadLine(x0: number, y0: number, x1: number, y1: number): void {
 roadLine(X0, MID - STEP, X0, MID + STEP);
 
 // blocks: interior rects between streets
-interface Block { x0: number; y0: number; x1: number; y1: number; zone: ZoneType | 'svc'; zoned: boolean; bx: number; by: number }
+interface Block { x0: number; y0: number; x1: number; y1: number; zone: ZoneType | 'svc' | null; zoned: boolean; bx: number; by: number }
+const COLS = Math.floor((X1 - X0) / STEP);
 const blocks: Block[] = [];
 for (let by = Y0; by + STEP <= Y1; by += STEP)
   for (let bx = X0; bx + STEP <= X1; bx += STEP) {
     const col = (bx - X0) / STEP, row = (by - Y0) / STEP;
     const cols = Math.floor((X1 - X0) / STEP);
-    let zone: ZoneType | 'svc';
-    if (col % 3 === 1 && col < cols - 1) zone = 'svc';
-    else if (col === 0) zone = ZoneType.Industry;
-    else if (row === Math.floor((MID - Y0) / STEP) - 1 || row === Math.floor((MID - Y0) / STEP)) zone = col % 3 === 0 ? ZoneType.Office : ZoneType.ComLow;
-    else zone = ZoneType.ResLow;
+    // service blocks are fixed; every other block is zoned on demand by the mayor
+    const zone: 'svc' | null = col % 3 === 1 && col < cols - 1 ? 'svc' : null;
+    void row;
     blocks.push({ x0: bx + 1, y0: by + 1, x1: bx + STEP - 1, y1: by + STEP - 1, zone, zoned: false, bx: col, by: row });
   }
 // order blocks by distance from the highway entrance so the city grows outward
 blocks.sort((a, b) => Math.hypot(a.x0 - X0, a.y0 - MID) - Math.hypot(b.x0 - X0, b.y0 - MID));
 
-function upgradeZone(z: ZoneType, m: number): ZoneType {
-  if (z === ZoneType.ResLow) return m >= 3 && Math.random() < 0.4 ? ZoneType.ResHigh : m >= 2 && Math.random() < 0.5 ? ZoneType.ResMed : ZoneType.ResLow;
-  if (z === ZoneType.ComLow) return m >= 3 && Math.random() < 0.5 ? ZoneType.ComHigh : ZoneType.ComLow;
-  if (z === ZoneType.Office) return m >= 4 ? ZoneType.Office : ZoneType.ComLow;
-  return z;
+/** zone type the mayor paints for a demand category (deterministic per block) */
+function zoneFor(cat: string, b: Block, m: number): ZoneType {
+  const r = hashFloat(b.bx, b.by, 91);
+  if (cat === 'res') return m >= 5 && r < 0.12 ? ZoneType.MixedUse : m >= 3 && r < 0.4 ? ZoneType.ResHigh : m >= 2 && r < 0.7 ? ZoneType.ResMed : ZoneType.ResLow;
+  if (cat === 'com') return m >= 3 && r < 0.5 ? ZoneType.ComHigh : ZoneType.ComLow;
+  if (cat === 'off') return ZoneType.Office;
+  return ZoneType.Industry;
+}
+/** next free block for a category: industry on the city edges, the rest near the centre */
+function nextBlock(cat: string): Block | undefined {
+  const free = blocks.filter((b) => !b.zoned && b.zone !== 'svc');
+  const edge = (b: Block) => b.bx === 0 || b.bx >= COLS - 2;
+  if (cat === 'ind') return free.find(edge) ?? free[free.length - 1];
+  return free.find((b) => !edge(b)) ?? free[0];
 }
 
 function blockRoads(b: Block): void {
@@ -101,9 +110,9 @@ function blockRoads(b: Block): void {
   roadLine(b.x1 + 1, b.y0 - 1, b.x1 + 1, b.y1 + 1);
 }
 
-function zoneBlock(b: Block): void {
+function zoneBlock(b: Block, cat: string): void {
   blockRoads(b);
-  const z = upgradeZone(b.zone as ZoneType, world.milestone);
+  const z = zoneFor(cat, b, world.milestone);
   for (let y = b.y0; y <= b.y1; y++) for (let x = b.x0; x <= b.x1; x++) if (!world.road[world.idx(x, y)]) world.setZone(x, y, z);
   b.zoned = true;
   b.zone = z;
@@ -257,9 +266,10 @@ function mayor(): void {
     const cat = CATS[c];
     if (s.demand[cat] > 0.15 || (pop < 100 && cat !== 'off')) {
       for (let k = 0; k < (s.demand[cat] > 0.5 ? 3 : 1); k++) {
-        const next = blocks.find((b) => !b.zoned && b.zone !== 'svc' && catOf(b.zone as ZoneType) === cat && (cat !== 'off' || world.isUnlocked(4)));
+        if (cat === 'off' && !world.isUnlocked(4)) continue;
+        const next = nextBlock(cat);
         const free = freeZoned(cat);
-        if (next && free < 24 + k * 60) zoneBlock(next);
+        if (next && free < 24 + k * 60) zoneBlock(next, cat);
       }
     }
   }
@@ -285,6 +295,23 @@ place('water_pump');
 place('sewage_outlet');
 const t0 = performance.now();
 let maxTick = 0;
+// optional growth diagnostics (--growth): count spawn attempt outcomes
+const gstat = { tries: 0, noReach: 0, noLot: 0, spawned: 0, locked: 0 };
+if (argv.includes('--growth')) {
+  const g = (sim as unknown as { growth: Record<string, (...a: unknown[]) => unknown> }).growth;
+  const origReach = g.reachesOutside.bind(g), origLot = g.findLot.bind(g), origSpawn = g.spawn.bind(g), origTry = g.trySpawn.bind(g);
+  g.trySpawn = (...a: unknown[]) => { gstat.tries++; return origTry(...a); };
+  g.reachesOutside = (...a: unknown[]) => { const r = origReach(...a); if (!r) gstat.noReach++; return r; };
+  g.findLot = (...a: unknown[]) => { const r = origLot(...a); if (!r) gstat.noLot++; return r; };
+  g.spawn = (...a: unknown[]) => { gstat.spawned++; return origSpawn(...a); };
+  const cs = (sim as unknown as { ctx: { candidates: Record<string, (...a: unknown[]) => unknown> } }).ctx.candidates;
+  const origElig = cs.eligible.bind(cs), origRandom = cs.random.bind(cs);
+  let inTry = false;
+  const tr = g.trySpawn;
+  g.trySpawn = (...a: unknown[]) => { inTry = true; const r = tr(...a); inTry = false; if (r === 0) gstat.locked++; return r; };
+  cs.random = (...a: unknown[]) => { const r = origRandom(...a); if (inTry) (gstat as Record<string, number>).samples = ((gstat as Record<string, number>).samples ?? 0) + 1; return r; };
+  cs.eligible = (...a: unknown[]) => { const r = origElig(...a); if (inTry && r !== a[3] && (r as number) < 0) (gstat as Record<string, number>).inelig = ((gstat as Record<string, number>).inelig ?? 0) + 1; return r; };
+}
 const pad = (v: unknown, n: number) => String(v).padStart(n);
 console.log('month   pop   hh  jobs unemp%  R     C     I     O    happy hlth edu  money     net   bldg lvl(1..5)        aband probs');
 for (let m = 0; m < YEARS * 12; m++) {
@@ -332,6 +359,28 @@ console.log('rates', JSON.stringify(sim.rates, (k, v) => (typeof v === 'number' 
 console.log('stats', JSON.stringify({ ...world.stats, demand: undefined }));
 console.log('achievements', world.achievements.join(', '));
 console.log('demand why', JSON.stringify(sim.demandFactors()));
+{
+  const last = (sim as unknown as { ctx: { last: { blockCount: Int32Array } } }).ctx.last;
+  const names = ['none', 'landValue', 'services', 'education', 'customers', 'goods', 'workers', 'utilities', 'happiness', 'maxLevel', 'construction', 'educatedWorkers', 'sales', 'occupancy', 'problems', 'policy'];
+  console.log('level blockers', names.map((n, i) => `${n}:${last.blockCount[i]}`).filter((x) => !x.endsWith(':0')).join(' '));
+  let lvSum = 0, lvN = 0, lvMax = 0;
+  for (const b of world.buildings.values()) if (b.kind === 'zoned') { const v = world.fields.landValue[world.idx(b.x, b.y)]; lvSum += v; lvN++; lvMax = Math.max(lvMax, v); }
+  {
+    const c = (sim as unknown as { ctx: { candidates: { count(c: number): number }; outside: { reach: Uint8Array } } }).ctx;
+    const freeBlocks = blocks.filter((b) => !b.zoned && b.zone !== 'svc').length;
+    let zonedEmpty = 0;
+    for (let i = 0; i < N; i++) if (world.zone[i] && !world.bldg[i]) zonedEmpty++;
+    console.log('candidates', [0, 1, 2, 3].map((k) => c.candidates.count(k)).join('/'), 'free blocks', freeBlocks, 'zoned empty cells', zonedEmpty);
+  }
+  if (argv.includes('--growth')) {
+    console.log('growth', JSON.stringify(gstat), 'milestone', world.milestone);
+    const byZone: Record<number, number> = {};
+    const cs = (sim as unknown as { ctx: { candidates: { has(i: number): boolean } } }).ctx.candidates;
+    for (let i = 0; i < N; i++) if (cs.has(i)) byZone[world.zone[i]] = (byZone[world.zone[i]] ?? 0) + 1;
+    console.log('candidate zones', JSON.stringify(byZone));
+  }
+  console.log('land value avg', (lvSum / Math.max(1, lvN)).toFixed(0), 'max', lvMax);
+}
 {
   let jc = 0, ji = 0, jo = 0;
   for (const b of world.buildings.values()) if (b.kind === 'zoned') { const c = catOf(b.zone); if (c === 'com' || b.zone === ZoneType.MixedUse) jc += b.jobs; else if (c === 'ind') ji += b.jobs; else if (c === 'off') jo += b.jobs; }

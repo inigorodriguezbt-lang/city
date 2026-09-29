@@ -61,6 +61,12 @@ export interface LightingInfo {
 
 const SHADOW_RADIUS_BY_QUALITY: Record<Settings['graphics']['shadows'], number> = { off: 0, low: 650, medium: 1000, high: 1500 };
 
+const _SPRING_CANOPY = new THREE.Color().setRGB(0.07, 0.12, 0.04);
+const _AUTUMN_CANOPY = new THREE.Color().setRGB(0.19, 0.08, 0.028);
+const _BARE_CANOPY = new THREE.Color().setRGB(0.075, 0.062, 0.05);
+const _CONIFER_CANOPY = new THREE.Color().setRGB(0.028, 0.058, 0.034);
+const _EVERGREEN_CANOPY = new THREE.Color().setRGB(0.07, 0.083, 0.045);
+
 function smooth01(x: number, a: number, b: number): number {
   const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
   return t * t * (3 - 2 * t);
@@ -113,6 +119,7 @@ export class GameRenderer {
   private shadowRadius = 1000;
   private lastSize = new THREE.Vector2(-1, -1);
   private whiteBalance = new THREE.Color(1, 1, 1);
+  private readonly _canopy = new THREE.Color();
   private readonly _ndc = new THREE.Vector2();
   private readonly _rc = new THREE.Raycaster();
   private readonly _v = new THREE.Vector3();
@@ -214,7 +221,12 @@ export class GameRenderer {
       ev.on('weather:changed', () => this.sky.invalidateEnvironment()),
     );
     if (this.overlay) this.overlays.setField(this.overlay);
-    this.sky.invalidateEnvironment();
+    this.sky.snap();
+  }
+
+  /** skip weather / lighting transitions: the next frame shows the current state directly */
+  snapTransitions(): void {
+    this.sky.snap();
   }
 
   onWorldUnloaded(): void {
@@ -314,8 +326,24 @@ export class GameRenderer {
     }
     this.trees?.setSeason(leaf, spring, autumn, blossom);
     const tu = this.terrain!.uniforms;
+    // distant forest canopy colour: theme species mix × season
+    let conifer = 0, evergreen = 0, decid = 0;
+    for (const sp of theme.trees) {
+      if (sp === 'pine' || sp === 'spruce' || sp === 'cypress') conifer++;
+      else if (sp === 'olive' || sp === 'palm' || sp === 'cactus' || sp === 'acacia') evergreen++;
+      else decid++;
+    }
+    const tot = Math.max(1, conifer + evergreen + decid);
+    const dc = this._canopy.setRGB(0.045, 0.085, 0.032).lerp(_SPRING_CANOPY, spring * 0.6).lerp(_AUTUMN_CANOPY, autumn * 0.85);
+    dc.lerp(_BARE_CANOPY, 1 - leaf);
+    const kd = decid / tot, kc = conifer / tot, ke = evergreen / tot;
+    tu.uCanopyCol.value.setRGB(
+      dc.r * kd + _CONIFER_CANOPY.r * kc + _EVERGREEN_CANOPY.r * ke,
+      dc.g * kd + _CONIFER_CANOPY.g * kc + _EVERGREEN_CANOPY.g * ke,
+      dc.b * kd + _CONIFER_CANOPY.b * kc + _EVERGREEN_CANOPY.b * ke,
+    );
     const dryness = 1 - theme.rainfall;
-    tu.uDry.value = THREE.MathUtils.clamp(dryness * 0.35 + summer * (0.12 + dryness * 0.45) + winter * 0.18 * seasonal - spring * 0.15, 0, 1);
+    tu.uDry.value = THREE.MathUtils.clamp(dryness * 0.35 + summer * (0.12 + dryness * 0.45) + winter * 0.4 * seasonal - spring * 0.15, 0, 1);
     tu.uLush.value = spring * 0.9 + (1 - summer) * (1 - winter) * 0.2;
     tu.uAutumn.value = autumn * 0.65;
     const t = this.terrain!;
@@ -347,7 +375,7 @@ export class GameRenderer {
       bloomStrength: 0.2 + 0.3 * night,
       desaturate: overlayK * INFO_VIEW_DESAT,
       sunDir: sky.keyDir,
-      cloudShadow: s && !s.clouds ? 0 : THREE.MathUtils.clamp(this.shared.uCloudCover.value * 1.2, 0, 0.55) * (1 - sky.overcast) * (1 - night) * THREE.MathUtils.smoothstep(sky.keyDir.y, 0.02, 0.2),
+      cloudShadow: s && !s.clouds ? 0 : THREE.MathUtils.clamp(this.shared.uCloudCover.value * 0.9, 0, 0.42) * (1 - sky.overcast) * (1 - night) * THREE.MathUtils.smoothstep(sky.keyDir.y, 0.02, 0.2),
       distance: this.cameraCtl.distance,
       pitch: this.cameraCtl.effectivePitch,
       whiteBalance: this.whiteBalance,

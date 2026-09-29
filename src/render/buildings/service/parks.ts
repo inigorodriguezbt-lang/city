@@ -11,14 +11,14 @@ import { stadiumPts } from './education';
 const PATH = 0xd6c9aa;
 
 /** smoothed gravel path through control points */
-function path(k: Kit, pts: P2[], w = 2.2, color: number = PATH, y = 0.09): P2[] {
+export function path(k: Kit, pts: P2[], w = 2.2, color: number = PATH, y = 0.09): P2[] {
   const sm = smoothPath(pts, k.lo ? 3 : 6);
   k.ribbon('paving', sm, w, y, color);
   return sm;
 }
 
 /** pond with stone rim, water surface and optional fountain */
-function pond(k: Kit, x: number, z: number, rx: number, rz: number, seed: number, fountain = false, color: number = 0x3f7f8a): void {
+export function pond(k: Kit, x: number, z: number, rx: number, rz: number, seed: number, fountain = false, color: number = 0x3f7f8a): void {
   k.blob('dirt', x, z, rx + 0.8, rz + 0.8, 0.08, 0x8f8676, 18, 0.16, seed);
   k.blob('water', x, z, rx, rz, 0.12, color, 18, 0.16, seed);
   if (!k.lo) {
@@ -34,7 +34,7 @@ function pond(k: Kit, x: number, z: number, rx: number, rz: number, seed: number
 }
 
 /** reeds / tall grass tufts */
-function reeds(k: Kit, x: number, z: number, n: number, spread: number): void {
+export function reeds(k: Kit, x: number, z: number, n: number, spread: number): void {
   if (k.lo) return;
   const r = k.ctx.rng;
   for (let i = 0; i < n; i++) {
@@ -317,11 +317,32 @@ const M: Record<string, (k: Kit) => number> = {
     // Victorian palm house: curved glass nave + central dome
     const gx = 0, gz = -12;
     k.box('wall_stone', gx, 0, gz, 40, 1, 14, 0xe6dcc6, { top: 'paving', topColor: 0xd8ccb0 });
-    k.box('glass', gx, 1, gz, 38, 5, 12, 0xcfe6e0, { top: false });
-    k.barrel('glass', gx, 6, gz, 12, 38, 5.5, 0xcfe6e0, k.seg(10), true, 'glass', 0xcfe6e0);
-    for (let i = 0; i <= 10; i++) k.box('metal', gx - 19 + i * 3.8, 1, gz + 6.05, 0.15, 5, 0.1, 0xf4f4f0, { top: false });
-    k.cyl('glass', gx, 1, gz, 7, 7, 9, 0xcfe6e0, k.seg(16), false);
-    k.dome('glass', gx, 10, gz, 7, 0xcfe6e0, k.seg(16), 1.05);
+    // pale, softly translucent-looking panes on white-painted cast-iron ribs
+    const pane = 0xd6eae4, iron = 0xf6f6f2;
+    k.box('plain', gx, 1, gz, 38, 5, 12, pane, { top: false });
+    k.barrel('plain', gx, 6, gz, 12, 38, 5.5, pane, k.seg(10), true, 'plain', pane);
+    for (let i = 0; i <= 10; i++) {
+      const x = gx - 19 + i * 3.8;
+      for (const sz of [-1, 1]) k.box('metal', x, 1, gz + sz * 6.05, 0.15, 5, 0.1, iron, { top: false });
+      if (!k.lo) {
+        const n = 8;
+        for (let j = 0; j < n; j++) {
+          const t0 = (j / n) * Math.PI, t1 = ((j + 1) / n) * Math.PI;
+          k.beam('metal', [x, 6 + Math.sin(t0) * 5.6, gz + Math.cos(t0) * 6.1], [x, 6 + Math.sin(t1) * 5.6, gz + Math.cos(t1) * 6.1], 0.14, 0.12, iron);
+        }
+      }
+    }
+    k.box('metal', gx, 11.45, gz, 38.4, 0.2, 0.3, iron);
+    k.cyl('plain', gx, 1, gz, 7, 7, 9, pane, k.seg(16), false);
+    k.dome('plain', gx, 10, gz, 7, pane, k.seg(16), 1.05);
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      k.box('metal', gx + Math.cos(a) * 7.05, 1, gz + Math.sin(a) * 7.05, 0.14, 9, 0.14, iron, { top: false });
+      if (!k.lo) for (let j = 0; j < 5; j++) {
+        const b0 = (j / 5) * (Math.PI / 2), b1 = ((j + 1) / 5) * (Math.PI / 2);
+        k.beam('metal', [gx + Math.cos(a) * Math.cos(b0) * 7.08, 10 + Math.sin(b0) * 7.35, gz + Math.sin(a) * Math.cos(b0) * 7.08], [gx + Math.cos(a) * Math.cos(b1) * 7.08, 10 + Math.sin(b1) * 7.35, gz + Math.sin(a) * Math.cos(b1) * 7.08], 0.12, 0.12, iron);
+      }
+    }
     k.cyl('metal', gx, 17.2, gz, 0.6, 0.3, 1.4, 0xf4f4f0, 8);
     for (let i = 0; i < 6; i++) tree(k, 'palm', gx - 15 + i * 6, gz + (i % 2 ? 2 : -2), 0.7, i, i);
     k.light(gx, 8, gz, 0xbfffd0, 16, 'neon');

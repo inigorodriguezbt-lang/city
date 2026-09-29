@@ -37,7 +37,7 @@ import { buildZoned, schedFor } from './zoned';
 import { civicFallback } from './zoned/civic';
 import { constructionModel, constructionStage, rubbleModel, weatherModel } from './zoned/states';
 import { massesFromParts } from './zoned/lodgen';
-import { mergeDetail, mergeLod, type MergeItem, type LodItem } from './zoned/merge';
+import { DetailMergeJob, LOD_VERTS_PER_MASS, mergeLod, patchInfo, type MergeItem, type LodItem } from './zoned/merge';
 import { buildGlowMesh, updateGlow, type WorldLight } from './zoned/glow';
 import { Cond, LodFacade, STYLE_INDEX, Sched, packInfo } from './zoned/constants';
 import { addFac, type LodMass, type ZAnim, type ZModel } from './zoned/fab';
@@ -98,6 +98,13 @@ interface DetailChunk {
   anim: THREE.Mesh | null;
   glow: THREE.Mesh | null;
   dist: number;
+  /** incremental merge in progress (cancelled when the chunk is dirtied) */
+  job: DetailMergeJob | null;
+  jobIds: number[];
+  /** building id → [static start, static count, anim start, anim count] in the current meshes */
+  ranges: Map<number, [number, number, number, number]>;
+  /** lamp/neon glow needs rebuilding (a building's lights switched on/off) */
+  glowDirty: boolean;
 }
 
 interface LodChunk {
@@ -107,6 +114,8 @@ interface LodChunk {
   clean: boolean;
   /** vertex range per detail sub-chunk key */
   ranges: Map<number, [number, number]>;
+  /** vertex range per building id (for in-place aInfo patches) */
+  bRanges: Map<number, [number, number]>;
   groupsSig: string;
   cx: number;
   cz: number;
@@ -141,6 +150,9 @@ export class BuildingRenderer {
   private hl: { id: number; color: THREE.Color; mesh: THREE.Group } | null = null;
   private hlMat: THREE.ShaderMaterial | null = null;
   private tmpV = new THREE.Vector3();
+  private pendingDetail: DetailChunk[] = [];
+  /** finished models of buildings under construction (LRU, keyed without state) */
+  private fullCache = new Map<string, ZModel>();
 
   constructor(protected game: Game) {
     this.group.name = 'buildings';
@@ -182,6 +194,11 @@ export class BuildingRenderer {
     this.binfo.clear();
     this.refineQueue = [];
     this.refineDirty.clear();
+    for (const m of this.fullCache.values()) {
+      for (const p of m.parts) p.geometry.dispose();
+      for (const an of m.anims) an.part.geometry.dispose();
+    }
+    this.fullCache.clear();
     this.pollIds = [];
     this.cachedVerts = 0;
     this.icons.set([]);
@@ -229,23 +246,52 @@ export class BuildingRenderer {
     this.refresh(bi, true);
   }
 
-  /** re-evaluate a building's model key / info; mark chunks dirty when needed */
+  /** re-evaluate a building's model key / info. Geometry changes re-merge the
+   *  chunk; info-only changes (lit level, fire, flood) patch vertices in place. */
   private refresh(bi: BInfo, force: boolean): void {
     const key = this.modelKey(bi.b, bi.fw, bi.fd);
     const info = this.infoOf(bi.b);
     const sig = this.signature(bi.b);
-    let dirty = force;
     if (key !== bi.key) {
       this.releaseModel(bi);
       bi.key = key;
+      bi.info = info;
+      bi.sig = sig;
       this.refineQueue.push(bi.b.id);
-      dirty = true;
+      this.markChunk(bi.chunk);
+    } else {
+      if (info !== bi.info) {
+        bi.info = info;
+        this.patchBuilding(bi);
+      }
+      if (sig !== bi.sig) {
+        bi.sig = sig;
+        const dc = this.dchunks.get(bi.chunk);
+        if (dc) dc.glowDirty = true;
+      }
+      if (force && !this.dchunks.get(bi.chunk)?.ranges.has(bi.b.id)) this.markChunk(bi.chunk);
     }
-    if (info !== bi.info || sig !== bi.sig) dirty = true;
-    bi.info = info;
-    bi.sig = sig;
-    if (dirty) this.markChunk(bi.chunk);
     if (this.hl?.id === bi.b.id && key !== this.hlKey) this.rebuildHighlight();
+  }
+
+  /** write a building's packed info into the merged detail + LOD meshes */
+  private patchBuilding(bi: BInfo): void {
+    const id = bi.b.id;
+    const dc = this.dchunks.get(bi.chunk);
+    if (dc) {
+      if (dc.job) dc.job = null; // restart the merge with the new info
+      const r = dc.ranges.get(id);
+      if (r) {
+        if (dc.mesh) patchInfo(dc.mesh.geometry, r[0], r[1], bi.info);
+        if (dc.anim) patchInfo(dc.anim.geometry, r[2], r[3], bi.info);
+      } else dc.clean = false;
+    }
+    const l = this.lchunks.get(this.lodKeyOf(bi.chunk));
+    if (l) {
+      const r = l.bRanges.get(id);
+      if (r && l.mesh) patchInfo(l.mesh.geometry, r[0], r[1], bi.info);
+      else l.clean = false;
+    }
   }
 
   private onWorldChanged(r: Rect, layers: number): void {
@@ -317,7 +363,7 @@ export class BuildingRenderer {
     let c = this.dchunks.get(key);
     if (!c) {
       const [x, y] = this.detailGrid!.coords(key);
-      c = { key, ids: new Set(), cx: (x + 0.5) * DETAIL_CHUNK * CELL, cz: (y + 0.5) * DETAIL_CHUNK * CELL, mode: 1, clean: false, ready: false, mesh: null, anim: null, glow: null, dist: Infinity };
+      c = { key, ids: new Set(), cx: (x + 0.5) * DETAIL_CHUNK * CELL, cz: (y + 0.5) * DETAIL_CHUNK * CELL, mode: 1, clean: false, ready: false, mesh: null, anim: null, glow: null, dist: Infinity, job: null, jobIds: [], ranges: new Map(), glowDirty: false };
       this.dchunks.set(key, c);
     }
     return c;
@@ -332,7 +378,7 @@ export class BuildingRenderer {
     let c = this.lchunks.get(key);
     if (!c) {
       const [x, y] = this.lodGrid!.coords(key);
-      c = { key, mesh: null, glow: null, clean: false, ranges: new Map(), groupsSig: '', cx: (x + 0.5) * LOD_CHUNK * CELL, cz: (y + 0.5) * LOD_CHUNK * CELL };
+      c = { key, mesh: null, glow: null, clean: false, ranges: new Map(), bRanges: new Map(), groupsSig: '', cx: (x + 0.5) * LOD_CHUNK * CELL, cz: (y + 0.5) * LOD_CHUNK * CELL };
       this.lchunks.set(key, c);
     }
     return c;
@@ -341,6 +387,7 @@ export class BuildingRenderer {
   private markChunk(detailKey: number): void {
     const dc = this.detailChunk(detailKey);
     dc.clean = false;
+    dc.job = null;
     this.lodChunk(this.lodKeyOf(detailKey)).clean = false;
   }
 
@@ -357,9 +404,13 @@ export class BuildingRenderer {
     return `${b.defId}|${b.kind === 'zoned' ? b.level : 1}|${fw}x${fd}|${b.style}|${b.seed}|${this.stateOf(b)}|${this.detailSetting()}`;
   }
 
+  /** 1 when the building's lamps / neon / floodlights should glow at night */
   private signature(b: Building): number {
-    const st = this.stateOf(b);
-    return (b.level * 131 + (b.flags & (BFlag.OnFire | BFlag.Flooded | BFlag.Abandoned | BFlag.Burned | BFlag.Collapsed | BFlag.Disabled)) * 7 + st.charCodeAt(0) * 3 + (st.length > 1 ? Number(st.slice(1)) : 0) + this.litLevel(b) * 100003) >>> 0;
+    return this.lampsOn(b) ? 1 : 0;
+  }
+
+  private lampsOn(b: Building): boolean {
+    return !(b.flags & (BFlag.Abandoned | BFlag.Burned | BFlag.Collapsed)) && b.built >= 1 && this.litLevel(b) > 0;
   }
 
   private litLevel(b: Building): 0 | 1 | 2 | 3 {
@@ -403,9 +454,18 @@ export class BuildingRenderer {
   private generate(bi: BInfo, detail: 'low' | 'medium' | 'high'): ZModel {
     const b = bi.b;
     const ctx = this.context(b, b.zone, b.kind === 'zoned' ? b.level : 1, bi.fw, bi.fd, b.style, b.seed, b.defId, detail);
-    const full = this.fullModel(b.kind, b.defId, ctx);
     const st = this.stateOf(b);
+    // buildings under construction step through ~9 stages: keep their finished
+    // model around so each stage only re-clips it (and completion is free)
+    const base = `${b.defId}|${ctx.level}|${bi.fw}x${bi.fd}|${b.style}|${b.seed}|${detail}`;
+    let full = this.fullCache.get(base);
+    if (full) this.fullCache.delete(base);
+    else full = this.fullModel(b.kind, b.defId, ctx);
     if (st === 'n') return full;
+    if (st[0] === 'c') {
+      this.fullCache.set(base, full);
+      if (this.fullCache.size > 64) this.fullCache.delete(this.fullCache.keys().next().value as string);
+    }
     const vctx = { ...ctx, rng: new RNG(hash2(b.seed, 0x7a7e)) };
     if (st === 'x') return rubbleModel(full, vctx);
     if (st[0] === 'c') return constructionModel(full, vctx, b.built);
@@ -589,6 +649,8 @@ export class BuildingRenderer {
     }
     this.disposeDetail(c);
     c.ready = false;
+    c.job = null;
+    c.jobIds = [];
   }
 
   /** round-robin check for state changes that did not raise events (construction progress, occupancy, power) */
@@ -615,54 +677,59 @@ export class BuildingRenderer {
   }
 
   private rebuildDetail(t0: number): void {
-    const pending: DetailChunk[] = [];
-    for (const c of this.dchunks.values()) if (c.mode === 2 && (!c.clean || !c.ready)) pending.push(c);
+    const pending = this.pendingDetail;
+    pending.length = 0;
+    for (const c of this.dchunks.values()) {
+      if (c.mode !== 2) continue;
+      if (!c.clean || !c.ready) pending.push(c);
+      else if (c.glowDirty) this.rebuildGlow(c);
+    }
     if (!pending.length) return;
     pending.sort((a, b) => a.dist - b.dist);
     let first = true;
     for (const c of pending) {
       if (!first && performance.now() - t0 > BUDGET_MS) break;
-      // generate missing models (budgeted); merge only once all are ready
-      let complete = true;
-      for (const id of c.ids) {
-        const bi = this.binfo.get(id);
-        if (!bi) continue;
-        if (bi.model && !bi.model.provisional && bi.model.parts) {
-          bi.model.used = this.frame;
-          continue;
+      if (!c.job) {
+        // generate missing models (budgeted); start merging once all are ready
+        let complete = true;
+        for (const id of c.ids) {
+          const bi = this.binfo.get(id);
+          if (!bi) continue;
+          if (bi.model && !bi.model.provisional && bi.model.parts) {
+            bi.model.used = this.frame;
+            continue;
+          }
+          if (!first && performance.now() - t0 > BUDGET_MS) {
+            complete = false;
+            break;
+          }
+          const hadLod = !!bi.model && !bi.model.provisional;
+          this.ensureModel(bi, true);
+          if (!hadLod) this.lodChunk(this.lodKeyOf(c.key)).clean = false;
+          first = false;
         }
-        if (!first && performance.now() - t0 > BUDGET_MS) {
-          complete = false;
-          break;
+        if (!complete) break;
+        const items: MergeItem[] = [];
+        c.jobIds = [];
+        for (const id of c.ids) {
+          const bi = this.binfo.get(id);
+          if (!bi?.model?.parts) continue;
+          items.push({ src: { parts: bi.model.parts, anims: bi.model.anims ?? undefined }, matrix: bi.matrix, info: bi.info });
+          c.jobIds.push(id);
         }
-        const hadLod = !!bi.model && !bi.model.provisional;
-        this.ensureModel(bi, true);
-        if (!hadLod) this.lodChunk(this.lodKeyOf(c.key)).clean = false;
-        first = false;
+        c.job = new DetailMergeJob(items);
       }
-      if (!complete) break;
-      this.mergeDetailChunk(c);
+      // the nearest chunk always advances a little, others only within budget
+      const deadline = first ? Math.max(t0 + BUDGET_MS, performance.now() + 1) : t0 + BUDGET_MS;
+      if (c.job.step(deadline)) this.finishDetailChunk(c);
       first = false;
     }
   }
 
-  private mergeDetailChunk(c: DetailChunk): void {
-    const items: MergeItem[] = [];
-    const lights: WorldLight[] = [];
-    for (const id of c.ids) {
-      const bi = this.binfo.get(id);
-      if (!bi?.model?.parts) continue;
-      items.push({ src: { parts: bi.model.parts, anims: bi.model.anims ?? undefined }, matrix: bi.matrix, info: bi.info });
-      const m = bi.matrix.elements;
-      for (const l of bi.model.lights) {
-        if (l.kind === 'beacon') continue; // beacons live in the LOD glow (visible from far)
-        if (bi.b.flags & (BFlag.Abandoned | BFlag.Burned | BFlag.Collapsed) || this.litLevel(bi.b) === 0) {
-          if (l.kind !== 'beacon') continue;
-        }
-        lights.push({ ...l, x: m[0] * l.x + m[8] * l.z + m[12], y: l.y + m[13], z: m[2] * l.x + m[10] * l.z + m[14] });
-      }
-    }
-    const merged = mergeDetail(items);
+  private finishDetailChunk(c: DetailChunk): void {
+    const job = c.job!;
+    c.job = null;
+    const merged = job.result();
     this.disposeDetail(c);
     const mat = getChunkMaterial();
     const shadows = this.shadows();
@@ -683,10 +750,13 @@ export class BuildingRenderer {
       c.anim.castShadow = shadows;
       c.anim.receiveShadow = true;
       c.anim.matrixAutoUpdate = false;
+      c.anim.name = `bld:anim:${c.key}`;
       this.detailGroup.add(c.anim);
     }
-    c.glow = buildGlowMesh(lights);
-    if (c.glow) this.glowGroup.add(c.glow);
+    const r = merged.ranges;
+    c.jobIds.forEach((id, i) => c.ranges.set(id, [r[i * 4], r[i * 4 + 1], r[i * 4 + 2], r[i * 4 + 3]]));
+    c.jobIds = [];
+    this.rebuildGlow(c);
     c.clean = true;
     c.ready = true;
     // emitters for this chunk's buildings
@@ -695,6 +765,28 @@ export class BuildingRenderer {
       if (bi) this.syncEmitters(bi);
     }
     this.detailSig = '';
+  }
+
+  /** lamp / neon / floodlight sprites of a detail chunk (beacons live in the LOD glow) */
+  private rebuildGlow(c: DetailChunk): void {
+    c.glowDirty = false;
+    if (c.glow) {
+      this.glowGroup.remove(c.glow);
+      c.glow.geometry.dispose();
+      c.glow = null;
+    }
+    const lights: WorldLight[] = [];
+    for (const id of c.ids) {
+      const bi = this.binfo.get(id);
+      if (!bi?.model || !this.lampsOn(bi.b)) continue;
+      const m = bi.matrix.elements;
+      for (const l of bi.model.lights) {
+        if (l.kind === 'beacon') continue;
+        lights.push({ ...l, x: m[0] * l.x + m[8] * l.z + m[12], y: l.y + m[13], z: m[2] * l.x + m[10] * l.z + m[14] });
+      }
+    }
+    c.glow = buildGlowMesh(lights);
+    if (c.glow) this.glowGroup.add(c.glow);
   }
 
   private rebuildLod(t0: number): void {
@@ -712,6 +804,7 @@ export class BuildingRenderer {
     const items: LodItem[] = [];
     const beacons: WorldLight[] = [];
     const subRanges: [number, number, number][] = [];
+    const bRanges: [number, number, number][] = [];
     let vert = 0;
     for (let sy = 0; sy < 2; sy++)
       for (let sx = 0; sx < 2; sx++) {
@@ -729,7 +822,8 @@ export class BuildingRenderer {
             bi.model = m;
           }
           items.push({ masses: m.masses, matrix: bi.matrix, info: bi.info });
-          vert += m.masses.length * 30;
+          bRanges.push([id, vert, m.masses.length * LOD_VERTS_PER_MASS]);
+          vert += m.masses.length * LOD_VERTS_PER_MASS;
           const e = bi.matrix.elements;
           for (const L of m.lights) if (L.kind === 'beacon' && !(bi.b.flags & (BFlag.Collapsed | BFlag.Burned))) beacons.push({ ...L, x: e[0] * L.x + e[8] * L.z + e[12], y: L.y + e[13], z: e[2] * L.x + e[10] * L.z + e[14], phase: (bi.b.seed % 97) / 97 });
         }
@@ -747,6 +841,8 @@ export class BuildingRenderer {
     }
     l.ranges.clear();
     for (const [dk, s, n] of subRanges) l.ranges.set(dk, [s, n]);
+    l.bRanges.clear();
+    for (const [id, s, n] of bRanges) l.bRanges.set(id, [s, n]);
     l.glow = buildGlowMesh(beacons);
     if (l.glow) this.glowGroup.add(l.glow);
     l.clean = true;
@@ -796,7 +892,11 @@ export class BuildingRenderer {
         return (B.cx - cam.x) ** 2 + (B.cz - cam.z) ** 2 - ((A.cx - cam.x) ** 2 + (A.cz - cam.z) ** 2);
       });
     }
-    while (this.refineQueue.length && performance.now() - t0 < BUDGET_MS) {
+    // always make a little progress so far LOD boxes converge even when the
+    // detail rebuilds consume the whole frame budget
+    let n = 0;
+    while (this.refineQueue.length && (n < 1 || performance.now() - t0 < BUDGET_MS)) {
+      n++;
       const id = this.refineQueue.pop()!;
       const bi = this.binfo.get(id);
       if (!bi || (bi.model && !bi.model.provisional)) continue;
@@ -1100,6 +1200,7 @@ export class BuildingRenderer {
       c.glow.geometry.dispose();
     }
     c.mesh = c.anim = c.glow = null;
+    c.ranges.clear();
   }
 
   private disposeLod(l: LodChunk): void {
@@ -1124,9 +1225,11 @@ export class BuildingRenderer {
   }
 }
 
-/** Drop CPU copies of vertex data once uploaded (positions keep their count). */
+/** Drop CPU copies of vertex data once uploaded (positions keep their count).
+ *  aInfo stays resident so per-building state can be patched in place. */
 function freeAfterUpload(g: THREE.BufferGeometry): void {
   for (const name of Object.keys(g.attributes)) {
+    if (name === 'aInfo') continue;
     const a = g.getAttribute(name) as THREE.BufferAttribute;
     a.onUpload(function (this: THREE.BufferAttribute) {
       (this as unknown as { array: THREE.TypedArray }).array = EMPTY_F32 as unknown as THREE.TypedArray;

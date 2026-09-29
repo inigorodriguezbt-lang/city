@@ -157,10 +157,11 @@ export function createWaterNormalTexture(size = 256, seed = 4242): THREE.DataTex
     for (let x = 0; x < size; x++) {
       const u = x / size, v = y / size;
       // periodic directional waves (integer wave numbers keep them tileable)
-      let s = 0.35 * Math.sin(TAU * (3 * u + 2 * v) + 1.3 * n.noise(u * 4, v * 4, 4));
-      s += 0.22 * Math.sin(TAU * (-2 * u + 5 * v) + 0.9);
-      s += 0.14 * Math.sin(TAU * (7 * u + 3 * v) + 2.1 * n.noise(u * 8, v * 8, 8));
-      s += 0.9 * n.fbm(u, v, 8, 5, 0.55);
+      // (kept weak and phase-warped so the tile never reads as a grid)
+      let s = 0.16 * Math.sin(TAU * (3 * u + 2 * v) + 2.6 * n.noise(u * 4, v * 4, 4));
+      s += 0.1 * Math.sin(TAU * (-2 * u + 5 * v) + 0.9 + 2.2 * n.noise(u * 4 + 0.5, v * 4, 4));
+      s += 0.07 * Math.sin(TAU * (7 * u + 3 * v) + 3.1 * n.noise(u * 8, v * 8, 8));
+      s += 1.0 * n.fbm(u, v, 8, 6, 0.56);
       h[y * size + x] = s;
     }
   return normalMapFromHeight(size, h, size / 48);

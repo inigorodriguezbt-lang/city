@@ -1,7 +1,7 @@
 // Policy engine: combines the effects of city-wide and district policies into
 // one flat effect record per district id, so per-building lookups are O(1).
 import type { Building, TaxCategory, ZoneCategory } from '../core/types';
-import { POLICIES, policyDef, type PolicyEffect, type PolicyInfo } from '../data/policies';
+import { POLICIES, policyDef, specializationDef, type PolicyEffect, type PolicyInfo } from '../data/policies';
 import type { World } from '../world/World';
 
 /** Fully resolved policy effects (all keys present). */
@@ -76,11 +76,24 @@ export class PolicySystem {
   /** effects per district id (index 0 = no district → city) */
   private table: Effects[] = [];
   private dirty = true;
+  /** signature of the policy / district state the table was built from */
+  private sig = '';
 
   constructor(private world: World) {}
 
   invalidate(): void {
     this.dirty = true;
+  }
+
+  /** Rebuild lazily if policies or districts changed behind our back (UI, undo, load, commands). */
+  sync(): void {
+    const w = this.world;
+    let sig = w.policies.join(',');
+    for (const d of w.districts) if (d) sig += `|${d.id}:${d.specialization ?? ''}:${d.policies.join(',')}`;
+    if (sig !== this.sig) {
+      this.sig = sig;
+      this.dirty = true;
+    }
   }
 
   /** city-wide effects (rebuilt lazily after toggles) */
@@ -100,7 +113,8 @@ export class PolicySystem {
     this.table[0] = this.city;
     for (const d of w.districts) {
       if (!d || d.id <= 0 || d.id > 255) continue;
-      if (!d.policies.length) {
+      const spec = specializationDef(d.specialization);
+      if (!d.policies.length && !spec) {
         this.table[d.id] = this.city;
         continue;
       }
@@ -114,6 +128,7 @@ export class PolicySystem {
         const p = policyDef(id);
         if (p && p.districtLevel) apply(e, p.effects);
       }
+      if (spec) apply(e, spec.effects);
       this.table[d.id] = e;
     }
     this.dirty = false;
@@ -214,16 +229,22 @@ export class PolicySystem {
     if (this.dirty) this.rebuild();
     const out = { ...this.city.demand };
     if (cityPop <= 0) return out;
+    const add = (fx: PolicyEffect, share: number) => {
+      if (!fx.demand) return;
+      for (const k of Object.keys(fx.demand) as ZoneCategory[]) out[k] += (fx.demand[k] ?? 0) * share;
+    };
     for (const d of this.world.districts) {
-      if (!d || d.id <= 0 || d.id > 255 || !d.policies.length) continue;
+      if (!d || d.id <= 0 || d.id > 255) continue;
+      const spec = specializationDef(d.specialization);
+      if (!d.policies.length && !spec) continue;
       const share = (districtPop[d.id] ?? 0) / cityPop;
       if (share <= 0) continue;
       for (const id of d.policies) {
         if (this.world.policies.includes(id)) continue;
         const p = policyDef(id);
-        if (!p?.districtLevel || !p.effects.demand) continue;
-        for (const k of Object.keys(p.effects.demand) as ZoneCategory[]) out[k] += (p.effects.demand[k] ?? 0) * share;
+        if (p?.districtLevel) add(p.effects, share);
       }
+      if (spec) add(spec.effects, share);
     }
     return out;
   }

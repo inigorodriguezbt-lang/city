@@ -7,7 +7,8 @@
 //        B = distance to the nearest water cell (m, 0..136, 200 = far)
 //        A = moisture 0..1 (forest + fertility + water proximity)
 //  nTex  RGBA8 (size+1)^2, linear filtered with mipmaps:
-//        RG = world normal x/z (encoded 0..1), B = curvature (0.5 = flat), A = 1
+//        RG = world normal x/z (encoded 0..1), B = curvature (0.5 = flat),
+//        A = tree canopy density of the adjacent cells (0..1; forests seen from afar)
 import * as THREE from 'three';
 import { CELL, WATER_EPS } from '../../core/constants';
 import type { Rect } from '../../core/types';
@@ -182,8 +183,35 @@ export class TerrainData {
         nd[o] = Math.round((nx * 0.5 + 0.5) * 255);
         nd[o + 1] = Math.round((nz * 0.5 + 0.5) * 255);
         nd[o + 2] = Math.max(0, Math.min(255, Math.round((0.5 + lap * 6) * 255)));
-        nd[o + 3] = 255;
+        nd[o + 3] = this.canopyAt(vx, vy);
       }
+  }
+
+  /** mean tree density (0..255) of the up to 4 cells touching vertex (vx, vy) */
+  private canopyAt(vx: number, vy: number): number {
+    const w = this.world;
+    const s = w.size;
+    let sum = 0, cnt = 0;
+    for (let oy = -1; oy <= 0; oy++)
+      for (let ox = -1; ox <= 0; ox++) {
+        const cx = vx + ox, cy = vy + oy;
+        if (cx < 0 || cy < 0 || cx >= s || cy >= s) continue;
+        sum += w.trees[cy * s + cx];
+        cnt++;
+      }
+    return cnt ? Math.round((sum / cnt / 3) * 255) : 0;
+  }
+
+  /** refresh only the canopy channel after tree edits inside `r` (cell rect) */
+  updateCanopy(r: Rect): void {
+    const s = this.world.size, n = this.n;
+    const vx0 = Math.max(0, r.x0), vy0 = Math.max(0, r.y0);
+    const vx1 = Math.min(s, r.x1 + 1), vy1 = Math.min(s, r.y1 + 1);
+    for (let vy = vy0; vy <= vy1; vy++) {
+      for (let vx = vx0; vx <= vx1; vx++) this.nData[(vy * n + vx) * 4 + 3] = this.canopyAt(vx, vy);
+      this.nTex.addUpdateRange((vy * n + vx0) * 4, (vx1 - vx0 + 1) * 4);
+    }
+    this.nTex.needsUpdate = true;
   }
 
   dispose(): void {

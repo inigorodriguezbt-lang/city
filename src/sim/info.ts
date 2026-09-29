@@ -12,9 +12,10 @@ import { budgetCategoryOf, defOf, isCrematorium, isGarbageProcessor } from './ca
 import { powerUse, sewageUse, waterUse } from './consumption';
 import { LEVEL_BLOCK_TEXT, LevelBlock } from './lifecycle';
 import { buildingTitle } from './naming';
-import { serviceBuildDays } from './services';
+import { perkOf } from './perks';
+import { isHousing, needsWater, serviceBuildDays } from './services';
 import { bsim } from './state';
-import { HOUSEHOLD_SIZE, LEVEL_UP_DAYS, LEVEL_UP_DAYS_PER_LEVEL } from './tuning';
+import { ABANDON_DISTRESS, BURNED_CLEAR_DAYS, HOUSEHOLD_SIZE, LEVEL_UP_DAYS, LEVEL_UP_DAYS_PER_LEVEL, RUBBLE_CLEAR_DAYS } from './tuning';
 import { zoneMeta } from './zonemeta';
 
 const PROBLEM_TEXT: [number, string][] = [
@@ -176,7 +177,11 @@ function environmentLines(ctx: SimContext, b: Building, lines: InfoLine[]): void
 }
 
 function utilityLines(b: Building, def: BuildingDef | undefined, lines: InfoLine[]): void {
-  const p = powerUse(b, def), wtr = waterUse(b, def), sw = sewageUse(b, def);
+  const p = powerUse(b, def);
+  // service buildings that do not depend on running water only list what they produce
+  const plumbing = !def || def.water !== undefined || def.sewage !== undefined || needsWater(def);
+  const wtr = plumbing ? waterUse(b, def) : Math.min(0, waterUse(b, def));
+  const sw = plumbing ? sewageUse(b, def) : Math.min(0, sewageUse(b, def));
   const ok = (f: number) => (b.flags & f) !== 0;
   if (p < 0) lines.push({ label: 'Produces', value: `${formatNumber(-p)} MW`, kind: 'good' });
   else if (p > 0) lines.push({ label: 'Electricity', value: `${p.toFixed(p < 1 ? 2 : 1)} MW ${ok(BFlag.Powered) ? '✓' : '✗'}`, kind: ok(BFlag.Powered) ? 'good' : 'bad' });
@@ -198,7 +203,7 @@ export function buildingInfo(ctx: SimContext, id: number): BuildingInfo | null {
   if (rubble) {
     return {
       title, subtitle: b.flags & BFlag.Burned ? 'Burned ruins' : 'Rubble', icon: '🧱',
-      lines: [{ label: 'Status', value: 'Destroyed — waiting to be cleared', kind: 'bad' }, { label: 'Cleared in', value: formatAge(Math.max(0, 60 - bs.cd)) }],
+      lines: [{ label: 'Status', value: 'Destroyed — waiting to be cleared', kind: 'bad' }, { label: 'Cleared in', value: formatAge(Math.max(0, (b.flags & BFlag.Collapsed ? RUBBLE_CLEAR_DAYS : BURNED_CLEAR_DAYS) - bs.cd)) }],
       problems: [], people: [],
     };
   }
@@ -230,7 +235,7 @@ export function buildingInfo(ctx: SimContext, id: number): BuildingInfo | null {
         lines.push({ label: 'Customers', value: `${formatNumber(b.visitors)} / day` });
         lines.push({ label: 'Goods in stock', value: pct(b.goods / 100), bar: bar(b.goods / 100), kind: goodBad(b.goods / 100) });
       } else if (m?.jobCat === 'ind') {
-        lines.push({ label: m.raw ? 'Output sold' : 'Output sold', value: pct(b.goods / 100), bar: bar(b.goods / 100), kind: goodBad(b.goods / 100) });
+        lines.push({ label: m.raw ? 'Output exported' : 'Output sold', value: pct(b.goods / 100), bar: bar(b.goods / 100), kind: goodBad(b.goods / 100) });
       }
     }
     if (b.built >= 1) {
@@ -246,7 +251,7 @@ export function buildingInfo(ctx: SimContext, id: number): BuildingInfo | null {
       if (bs.dead > 0) lines.push({ label: 'Awaiting hearse', value: formatNumber(bs.dead), kind: 'bad' });
       utilityLines(b, undefined, lines);
       lines.push({ label: 'Taxes', value: `${formatMoney(bs.tx)} / month` });
-      if (b.distress > 0 && !(b.flags & BFlag.Abandoned)) lines.push({ label: 'Distress', value: pct(b.distress / 40), bar: bar(b.distress / 40), kind: 'bad' });
+      if (b.distress > 0 && !(b.flags & BFlag.Abandoned)) lines.push({ label: 'Distress', value: pct(Math.min(1, b.distress / ABANDON_DISTRESS)), bar: bar(b.distress / ABANDON_DISTRESS), kind: 'bad' });
       lines.push({ label: 'Age', value: formatAge(b.age) });
     }
     return { title, subtitle, icon: zd?.icon ?? '🏠', lines, people: peopleOf(ctx, b), problems: problemTexts(b) };
@@ -270,7 +275,12 @@ export function buildingInfo(ctx: SimContext, id: number): BuildingInfo | null {
   }
   if (b.jobs > 0) lines.push({ label: 'Workers', value: `${formatNumber(b.workers)} / ${formatNumber(b.jobs)}`, bar: bar(b.workers / b.jobs), kind: goodBad(b.workers / b.jobs) });
   const cap = def.capacity ?? 0;
-  if (cap > 0) {
+  if (cap > 0 && isHousing(def)) {
+    lines.push({ label: 'Residents', value: `${formatNumber(b.residents)} / ${formatNumber(cap)}`, bar: bar(b.residents / cap) });
+    lines.push({ label: 'Households', value: formatNumber(Math.ceil(b.residents / HOUSEHOLD_SIZE)) });
+    lines.push({ label: 'Happiness', value: pct(b.happiness / 100), bar: bar(b.happiness / 100), kind: goodBad(b.happiness / 100) });
+    lines.push({ label: 'Education', value: pct(b.education / 100), bar: bar(b.education / 100), kind: goodBad(b.education / 100) });
+  } else if (cap > 0) {
     const label = def.capacityLabel ?? 'Capacity';
     if (def.category === 'garbage' && !isGarbageProcessor(def)) {
       lines.push({ label: 'Filled', value: `${formatNumber(bs.st)} / ${formatNumber(cap)} ${label}`, bar: bar(bs.st / cap), kind: bs.st / cap > 0.9 ? 'bad' : 'neutral' });
@@ -284,9 +294,11 @@ export function buildingInfo(ctx: SimContext, id: number): BuildingInfo | null {
   if (radius > 0) lines.push({ label: 'Coverage radius', value: `${radius} cells (${radius * 16} m)` });
   utilityLines(b, def, lines);
   if (def.vehicles) lines.push({ label: 'Vehicles', value: `${def.vehicles.count} ${def.vehicles.type === 'service' ? 'service vehicles' : def.vehicles.type + (def.vehicles.count > 1 ? 's' : '')}` });
-  if ((def.category === 'tourism' || def.category === 'landmark' || def.category === 'monument') && b.visitors > 0) {
+  if ((def.category === 'tourism' || def.category === 'landmark' || def.category === 'monument') && b.visitors > 0 && !isHousing(def)) {
     lines.push({ label: 'Visitors', value: `${formatNumber(b.visitors * 30)} / month` });
   }
+  const perk = perkOf(def);
+  if (perk) for (const t of perk.text) lines.push({ label: 'City-wide', value: t, kind: b.efficiency > 0 && b.built >= 1 ? 'good' : 'neutral' });
   lines.push({ label: 'Budget', value: pct(budget), kind: budget < 0.8 ? 'bad' : budget > 1.1 ? 'good' : 'neutral' });
   lines.push({ label: 'Upkeep', value: `${formatMoney(def.upkeep * (disabled ? 0.25 : budget))} / month` });
   if (b.built >= 1) lines.push({ label: 'Age', value: formatAge(b.age) });

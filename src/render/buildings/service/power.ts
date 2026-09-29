@@ -8,7 +8,7 @@ import { coolingTower, hall, pipeRack, windTurbine, rollDoors, officeBlock, lamp
 
 // ── shared plant furniture ────────────────────────────────────────────────
 /** electrical switchyard: gravel pad, transformers, gantries, fence */
-function switchyard(k: Kit, x: number, z: number, w: number, d: number, trafos = 2): void {
+export function switchyard(k: Kit, x: number, z: number, w: number, d: number, trafos = 2): void {
   k.slab('dirt', x, z, w, d, 0.08, 0xa39c8e, 0.3);
   const n = Math.max(1, trafos);
   for (let i = 0; i < n; i++) {

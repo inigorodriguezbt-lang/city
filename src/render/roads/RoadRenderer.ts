@@ -327,6 +327,10 @@ export class RoadRenderer {
     const rate = target > this.wet ? 0.35 : 0.04;
     this.wet += (target - this.wet) * Math.min(1, rate * dt * 3);
     this.snow += (wt.snowCover - this.snow) * Math.min(1, dt * 0.8);
+    // follow the renderer's shared weather state when present (wet after rain, smoothed snow)
+    const shared = (r as { shared?: { uWetness?: { value: number }; uSnow?: { value: number } } }).shared;
+    if (shared?.uWetness) this.wet = Math.max(this.wet, shared.uWetness.value);
+    if (shared?.uSnow) this.snow = shared.uSnow.value;
     this.uniforms.uWet.value = this.wet;
     this.uniforms.uSnow.value = this.snow;
     this.uniforms.uLeftHand.value = w.settings.leftHandTraffic ? 1 : 0;

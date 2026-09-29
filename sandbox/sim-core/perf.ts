@@ -82,9 +82,16 @@ sim.onWorldLoaded(world);
 console.log(`buildings: ${world.buildings.size} (zoned ${spawned}, services ${placedSvc})`);
 // warm up 10 days, then measure 60 days at 10x (0.2 s per day)
 const times: number[] = [];
+const cpuTimes: number[] = [];
 for (let f = 0; f < 70 * 12; f++) {
+  const tick0 = sim.perf.buildingsPerTick, c0 = process.cpuUsage();
+  const before = Math.floor(world.time.day * 8);
   sim.update(2 / 12);
+  const c1 = process.cpuUsage(c0);
   world.flushChanges();
+  const ran = Math.floor(world.time.day * 8) - before;
+  void tick0;
+  if (f >= 10 * 12 && ran > 0) cpuTimes.push((c1.user + c1.system) / 1000 / ran);
   if (f >= 10 * 12) {
     times.push(sim.perf.lastTickMs);
     const p = sim.perf;
@@ -95,8 +102,12 @@ times.sort((a, b) => a - b);
 const avg = times.reduce((a, b) => a + b, 0) / times.length;
 const pct = (p: number) => times[Math.min(times.length - 1, Math.floor(times.length * p))].toFixed(3);
 console.log(`ticks measured: ${times.length}; avg ${avg.toFixed(3)} ms, p50 ${pct(0.5)}, p90 ${pct(0.9)}, p99 ${pct(0.99)}, max ${times[times.length - 1].toFixed(3)} ms`);
+cpuTimes.sort((a, b) => a - b);
+const cavg = cpuTimes.reduce((a, b) => a + b, 0) / Math.max(1, cpuTimes.length);
+console.log(`cpu time per tick: avg ${cavg.toFixed(3)} ms, p50 ${cpuTimes[Math.floor(cpuTimes.length * 0.5)]?.toFixed(3)}, p90 ${cpuTimes[Math.floor(cpuTimes.length * 0.9)]?.toFixed(3)}, p99 ${cpuTimes[Math.floor(cpuTimes.length * 0.99)]?.toFixed(3)}, max ${cpuTimes[cpuTimes.length - 1]?.toFixed(3)} ms`);
 console.log(`building:changed per day: ${(touches / 70).toFixed(0)}`);
 console.log(`population ${world.stats.population}, jobs ${world.stats.jobs}, happiness ${world.stats.happiness}, buildings/tick ${sim.perf.buildingsPerTick}`);
+if (process.argv.includes('--noff')) process.exit(0);
 const ff0 = performance.now();
 sim.advanceDays(3600);
 console.log(`advanceDays(3600): ${(performance.now() - ff0).toFixed(0)} ms → day ${world.time.day.toFixed(1)}, pop ${world.stats.population}, buildings ${world.buildings.size}`);

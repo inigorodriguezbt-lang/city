@@ -15,54 +15,62 @@ import { P, col, desaturate } from './util';
 /** Keep the part of a non-indexed geometry below y = h (all attributes interpolated). */
 export function clipBelow(g: THREE.BufferGeometry, h: number): THREE.BufferGeometry | null {
   const pos = g.getAttribute('position') as THREE.BufferAttribute;
-  const names = Object.keys(g.attributes);
-  const attrs = names.map((n) => g.getAttribute(n) as THREE.BufferAttribute);
-  const out: number[][] = names.map(() => []);
+  const P = pos.array as ArrayLike<number>;
   const n = pos.count;
-  let allBelow = true;
-  for (let i = 0; i < n; i++) if (pos.getY(i) > h) { allBelow = false; break; }
+  let allBelow = true, anyBelow = false;
+  for (let i = 0; i < n; i++) {
+    if (P[i * 3 + 1] > h) allBelow = false;
+    else anyBelow = true;
+  }
   if (allBelow) return g.clone();
-  const vert = (i: number): number[][] => attrs.map((a) => {
-    const v: number[] = [];
-    for (let k = 0; k < a.itemSize; k++) v.push(a.array[i * a.itemSize + k] as number);
-    return v;
-  });
-  const lerpV = (a: number[][], b: number[][], t: number): number[][] => a.map((va, ai) => va.map((x, k) => {
-    const y = x + (b[ai][k] - x) * t;
-    return attrs[ai].normalized || attrs[ai].array instanceof Uint8Array ? Math.round(y) : y;
-  }));
-  const push = (v: number[][]) => v.forEach((vals, ai) => out[ai].push(...vals));
-  const pi = names.indexOf('position');
+  if (!anyBelow) return null;
+  const names = Object.keys(g.attributes);
+  const srcs = names.map((nm) => g.getAttribute(nm) as THREE.BufferAttribute);
+  const sizes = srcs.map((a) => a.itemSize);
+  const ints = srcs.map((a) => a.normalized || !(a.array instanceof Float32Array));
+  // worst case: every triangle becomes a quad (2 triangles)
+  const outs = srcs.map((a) => new (a.array.constructor as new (n: number) => THREE.TypedArray)(n * 2 * a.itemSize));
+  let o = 0;
+  const na = names.length;
+  /** copy source vertex i, or the lerp of vertices i→j at t, to output slot o */
+  const emit = (i: number, j: number, t: number): void => {
+    for (let ai = 0; ai < na; ai++) {
+      const s = sizes[ai], src = srcs[ai].array as ArrayLike<number>, dst = outs[ai];
+      const si = i * s, sj = j * s, d = o * s;
+      if (t === 0) for (let k = 0; k < s; k++) dst[d + k] = src[si + k];
+      else if (ints[ai]) for (let k = 0; k < s; k++) dst[d + k] = Math.round(src[si + k] + (src[sj + k] - src[si + k]) * t);
+      else for (let k = 0; k < s; k++) dst[d + k] = src[si + k] + (src[sj + k] - src[si + k]) * t;
+    }
+    o++;
+  };
   for (let t = 0; t < n; t += 3) {
-    const V = [vert(t), vert(t + 1), vert(t + 2)];
-    const ys = V.map((v) => v[pi][1]);
-    const below = ys.map((y) => y <= h);
-    const cnt = below.filter(Boolean).length;
-    if (cnt === 3) { V.forEach(push); continue; }
+    const y0 = P[t * 3 + 1], y1 = P[t * 3 + 4], y2 = P[t * 3 + 7];
+    const b0 = y0 <= h, b1 = y1 <= h, b2 = y2 <= h;
+    const cnt = (b0 ? 1 : 0) + (b1 ? 1 : 0) + (b2 ? 1 : 0);
     if (cnt === 0) continue;
-    // rotate so the odd vertex is first
-    let k = 0;
-    if (cnt === 1) k = below.indexOf(true);
-    else k = below.indexOf(false);
-    const A = V[k], B = V[(k + 1) % 3], C = V[(k + 2) % 3];
-    const yA = A[pi][1], yB = B[pi][1], yC = C[pi][1];
-    const AB = lerpV(A, B, (h - yA) / (yB - yA));
-    const AC = lerpV(A, C, (h - yA) / (yC - yA));
+    if (cnt === 3) {
+      emit(t, t, 0); emit(t + 1, t + 1, 0); emit(t + 2, t + 2, 0);
+      continue;
+    }
+    // rotate so the odd vertex is A (keeps winding)
+    const k = cnt === 1 ? (b0 ? 0 : b1 ? 1 : 2) : (!b0 ? 0 : !b1 ? 1 : 2);
+    const A = t + k, B = t + ((k + 1) % 3), C = t + ((k + 2) % 3);
+    const yA = P[A * 3 + 1], yB = P[B * 3 + 1], yC = P[C * 3 + 1];
+    const tAB = (h - yA) / (yB - yA), tAC = (h - yA) / (yC - yA);
     if (cnt === 1) {
       // only A below
-      push(A); push(AB); push(AC);
+      emit(A, A, 0); emit(A, B, tAB); emit(A, C, tAC);
     } else {
-      // A above, B & C below → quad B, C, AC, AB
-      push(AB); push(B); push(C);
-      push(AB); push(C); push(AC);
+      // A above, B & C below → quad AB, B, C, AC
+      emit(A, B, tAB); emit(B, B, 0); emit(C, C, 0);
+      emit(A, B, tAB); emit(C, C, 0); emit(A, C, tAC);
     }
   }
-  if (!out[pi].length) return null;
+  if (!o) return null;
   const r = new THREE.BufferGeometry();
   names.forEach((name, ai) => {
-    const a = attrs[ai];
-    const Ctor = (a.array as unknown as { constructor: new (arr: number[]) => THREE.TypedArray }).constructor;
-    r.setAttribute(name, new THREE.BufferAttribute(new Ctor(out[ai]), a.itemSize, a.normalized));
+    const a = srcs[ai];
+    r.setAttribute(name, new THREE.BufferAttribute(outs[ai].slice(0, o * a.itemSize), a.itemSize, a.normalized));
   });
   r.computeBoundingSphere();
   return r;
@@ -204,11 +212,13 @@ export function rubbleModel(full: ZModel, ctx: ModelContext): ZModel {
   const rng = f.rng;
   lotGround(f, W, D, 'dirt', col('#6f6458'));
   const B = f.m();
-  const masses: LodMass[] = full.masses.filter((m) => m.h > 2 && m.w > 2);
+  // the largest few volumes are enough to read as a collapsed building
+  const masses: LodMass[] = full.masses.filter((m) => m.h > 2 && m.w > 2).sort((a, b) => b.w * b.d * b.h - a.w * a.d * a.h).slice(0, 5);
   if (!masses.length) masses.push({ cx: 0, cz: 0, w: W * 0.6, d: D * 0.5, y0: 0, h: 8, rot: 0, wall: [0.6, 0.6, 0.6], roof: [0.4, 0.4, 0.4], fac: LodFacade.None });
   for (const m of masses) {
     const wall = new THREE.Color(m.wall[0], m.wall[1], m.wall[2]);
-    const dust = desaturate(wall, 0.5).multiplyScalar(0.75);
+    // debris reads as a mix of the building's own walls, concrete dust and soil
+    const dust = desaturate(wall, 0.55).lerp(col('#6b6255'), 0.55).multiplyScalar(0.85);
     const hh = Math.min(9, 1.2 + m.h * 0.18);
     f.pushTRS(m.cx, 0, m.cz, m.rot);
     // main heap
@@ -217,13 +227,14 @@ export function rubbleModel(full: ZModel, ctx: ModelContext): ZModel {
     // spread debris mounds
     for (let i = 0; i < 5; i++) {
       const x = (rng.next() - 0.5) * m.w, z = (rng.next() - 0.5) * m.d;
-      f.m().cylinder('concrete', x, 0, z, 1.5 + rng.next() * 2.5, 0.3, 0.8 + rng.next() * hh * 0.4, desaturate(wall, 0.4).multiplyScalar(0.8 + rng.next() * 0.2), 6, { top: true });
+      const dc = rng.chance(0.5) ? desaturate(wall, 0.3).lerp(col('#7d766c'), 0.35) : col(rng.pick(['#8c8479', '#6f675c', '#9a8f80', '#5f5850']));
+      f.m().cylinder('concrete', x, 0, z, 1.5 + rng.next() * 2.5, 0.3, 0.8 + rng.next() * hh * 0.4, dc.multiplyScalar(0.75 + rng.next() * 0.2), 6, { top: true });
     }
     // tilted slabs
     for (let i = 0; i < 4; i++) {
       const g = new THREE.BoxGeometry(2 + rng.next() * 4, 0.3, 1.5 + rng.next() * 3);
       const mtx = new THREE.Matrix4().compose(new THREE.Vector3((rng.next() - 0.5) * m.w * 0.7, 0.5 + rng.next() * hh * 0.6, (rng.next() - 0.5) * m.d * 0.7), new THREE.Quaternion().setFromEuler(new THREE.Euler(rng.next() - 0.5, rng.next() * 6, rng.next() - 0.5)), new THREE.Vector3(1, 1, 1));
-      f.m().addGeometry('concrete', g, '#9a958c', mtx);
+      f.m().addGeometry('concrete', g, rng.pick(['#8e897f', '#a39d92', '#7a756c']), mtx);
       g.dispose();
     }
     // broken wall stubs at the corners

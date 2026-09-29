@@ -2,6 +2,8 @@
 // MenuSystem internals and makes them easy to boot in the sandbox).
 import type { Game } from '../../game/Game';
 import type { SfxId } from '../../audio/AudioManager';
+import type { ActionId } from '../../settings/types';
+import type { SkylineBackground } from './skyline';
 
 export interface MenuLayer {
   /** unique id ("main", "options", "confirm", …) */
@@ -31,8 +33,21 @@ export interface ConfirmOpts {
   icon?: string;
 }
 
+/** screens that can be opened from anywhere in the menus */
+export interface MenuNav {
+  newGame(): void;
+  load(): void;
+  save(): void;
+  options(tab?: string): void;
+  help(): void;
+  credits(): void;
+  photoTips(): void;
+  pause(): void;
+}
+
 export interface MenuCtx {
   game: Game;
+  nav: MenuNav;
   /** play a UI sound (never throws) */
   sfx(id: SfxId, volume?: number): void;
   /** attach a hover/focus tooltip; `key` shows a keycap hint */
@@ -40,9 +55,20 @@ export interface MenuCtx {
   push(layer: MenuLayer): void;
   /** remove a specific layer (or the top one) */
   pop(layer?: MenuLayer): void;
+  /** remove every non-base layer (and the base one too when `all`) */
+  closeAll(all?: boolean): void;
+  /** is a layer with this id on the stack */
+  has(id: string): boolean;
   confirm(title: string, text: string, opts?: ConfirmOpts): Promise<boolean>;
   /** true when UI animations should be minimal */
   reduced(): boolean;
   /** show a transient message at the bottom of the menus */
   notify(text: string, kind?: 'info' | 'good' | 'bad'): void;
+  /** first binding label of an action ("" when unbound) */
+  key(action: ActionId): string;
+  /** the shared animated skyline backdrop (lazily created) */
+  sky(): SkylineBackground;
+  /** show the loading overlay */
+  loading(text: string, progress: number): void;
+  hideLoading(): void;
 }

@@ -2,6 +2,7 @@
 // (sliced across TICKS_PER_DAY ticks); its contributions land here and are
 // turned into CityStats, rates, demand and money at the end of the day.
 import type { Building, TaxCategory, ZoneCategory } from '../core/types';
+import { PerkAcc } from './perks';
 
 export const PROBLEM_SLOTS = 20;
 
@@ -97,6 +98,8 @@ export class DayAgg {
   /** zoned buildings covered by every unlocked key service / evaluated */
   coveredAll = 0;
   coverageEvaluated = 0;
+  /** efficiency of special buildings granting city-wide perks */
+  perks = new PerkAcc();
   /** power produced by renewables (nominal MW) and total nominal MW */
   renewableMW = 0;
   nominalMW = 0;
@@ -135,9 +138,12 @@ export class DayAgg {
 
   /** record a problem bitmask with reservoir sampling of an example building */
   addProblems(mask: number, id: number, r: number): void {
-    if (!mask) return;
-    for (let bit = 0; bit < PROBLEM_SLOTS; bit++) {
-      if (!(mask & (1 << bit))) continue;
+    // visit set bits only (lowest first)
+    let m = mask & ((1 << PROBLEM_SLOTS) - 1);
+    while (m) {
+      const low = m & -m;
+      const bit = 31 - Math.clz32(low);
+      m ^= low;
       const n = ++this.problemCount[bit];
       if (n === 1 || r * n < 1) this.problemSample[bit] = id;
     }

@@ -92,8 +92,9 @@ void main() {
     wp.xyz /= wp.w;
     vec3 L = normalize(vec3(uSunDir.x, max(uSunDir.y, 0.12), uSunDir.z));
     vec2 q = wp.xz + L.xz / L.y * (2200.0 - wp.y);
-    float cs = cloudDensity(q);
-    c *= 1.0 - uCloudShadow * smoothstep(0.05, 0.7, cs);
+    // blurred (two taps, offset along the light) so the penumbra stays soft
+    float cs = cloudDensity(q) * 0.6 + cloudDensity(q + L.xz * 260.0) * 0.4;
+    c *= 1.0 - uCloudShadow * smoothstep(0.0, 0.95, cs);
   }
   float l = dot(c, LUMA);
   c = mix(c, vec3(l), uDesat);

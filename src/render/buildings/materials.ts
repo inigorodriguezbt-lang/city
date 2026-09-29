@@ -1152,6 +1152,32 @@ if ((bCond & 2u) != 0u) {
   if ((bCond & 8u) == 0u) bO.emit *= 0.0;
   else bO.emit += vec3(1.0, 0.28, 0.05) * 0.8 * smoothstep(0.55, 0.8, s) * (0.6 + 0.4 * bVN(vec2(uTime * 5.0, vBWPos.y)));
 }
+if ((bCond & 4u) != 0u) {
+  // flooded: soaked dark band under a ragged waterline, silt stain above,
+  // wet sheen; lot surfaces get puddles
+  float wob = bVN(vec2(dot(vBWPos.xz, vec2(0.6, 0.8)) * 0.9, 3.7));
+#if BTYPE >= 1 && BTYPE <= 9
+  float wl = 1.15 + 0.12 * wob;
+  float aaw = 0.015 + bMpp;
+  float below = 1.0 - smoothstep(wl - aaw, wl + aaw, bUv.y);
+  float stain = (1.0 - smoothstep(wl, wl + 0.55, bUv.y)) * (1.0 - below);
+  float line = (1.0 - smoothstep(0.0, 0.03 + bMpp, abs(bUv.y - wl - 0.04)));
+  bO.alb = mix(bO.alb, bO.alb * vec3(0.3, 0.29, 0.25), below);
+  bO.alb = mix(bO.alb, bO.alb * vec3(0.74, 0.67, 0.55), stain * 0.55);
+  bO.alb = mix(bO.alb, vec3(0.28, 0.24, 0.18), line * 0.6);
+  bO.rough = mix(bO.rough, 0.22, below);
+  bO.refl = max(bO.refl, 0.3 * below);
+  bO.emit *= 1.0 - below;
+#elif (BTYPE >= 25 && BTYPE <= 27) || BTYPE == 32
+  if (bN.y > 0.9) {
+    float pud = smoothstep(0.42, 0.6, bFbm(vBWPos.xz * 0.12));
+    bO.alb = mix(bO.alb * 0.62, vec3(0.16, 0.15, 0.12), pud * 0.7);
+    bO.rough = mix(bO.rough, 0.08, pud);
+    bO.refl = max(bO.refl, 0.55 * pud);
+    bO.f0 = mix(bO.f0, 0.03, pud);
+  }
+#endif
+}
 if ((bCond & 8u) != 0u) {
   // on fire: flickering orange glow washing over the surfaces
   float fl = 0.55 + 0.45 * bVN(vec2(uTime * 6.0 + vBWPos.x * 0.2, vBWPos.y * 0.4 - uTime * 2.0));

@@ -30,13 +30,20 @@ const LENS_OF: Partial<Record<FT, number>> = { [FT.LampPole]: 0, [FT.LampDouble]
 class FList {
   a = new Float32Array(64);
   n = 0;
-  push(...v: number[]): void {
-    if (this.n + v.length > this.a.length) {
-      const b = new Float32Array(Math.max(this.a.length * 2, this.n + v.length));
+  /** make room for k more values and return the write offset */
+  reserve(k: number): number {
+    if (this.n + k > this.a.length) {
+      const b = new Float32Array(Math.max(this.a.length * 2, this.n + k));
       b.set(this.a);
       this.a = b;
     }
-    for (const x of v) this.a[this.n++] = x;
+    const o = this.n;
+    this.n += k;
+    return o;
+  }
+  push(...v: number[]): void {
+    const o = this.reserve(v.length);
+    for (let i = 0; i < v.length; i++) this.a[o + i] = v[i];
   }
   take(): Float32Array {
     return this.a.slice(0, this.n);
@@ -81,7 +88,25 @@ export class FurnitureBuilder {
   add(t: FT, x: number, y: number, z: number, yaw: number, sx = 1, sy = 1, sz = 1): void {
     if (!this.detail && t !== FT.Trunk && t !== FT.Canopy) return;
     const c = Math.cos(yaw), s = Math.sin(yaw);
-    this.mats[t].push(c * sx, 0, -s * sx, 0, 0, sy, 0, 0, s * sz, 0, c * sz, 0, x, y, z, 1);
+    const m = this.mats[t];
+    const o = m.reserve(16);
+    const a = m.a;
+    a[o] = c * sx;
+    a[o + 1] = 0;
+    a[o + 2] = -s * sx;
+    a[o + 3] = 0;
+    a[o + 4] = 0;
+    a[o + 5] = sy;
+    a[o + 6] = 0;
+    a[o + 7] = 0;
+    a[o + 8] = s * sz;
+    a[o + 9] = 0;
+    a[o + 10] = c * sz;
+    a[o + 11] = 0;
+    a[o + 12] = x;
+    a[o + 13] = y;
+    a[o + 14] = z;
+    a[o + 15] = 1;
   }
 
   tree(x: number, y: number, z: number, scale: number, seed: number): void {
@@ -490,7 +515,7 @@ export class FurnitureSystem {
     this.poolGeo.index = quad.index;
     this.poolGeo.setAttribute('position', quad.getAttribute('position'));
     this.glowMat = lightMaterial(GLOW_VS, GLOW_FS, { uNight: { value: 0 }, uPixel: { value: 0.001 }, uColor: { value: new THREE.Color(1.0, 0.78, 0.5) } }, true);
-    this.poolMat = lightMaterial(POOL_VS, POOL_FS, { uNight: { value: 0 }, uColor: { value: new THREE.Color(0.55, 0.4, 0.22) } }, true);
+    this.poolMat = lightMaterial(POOL_VS, POOL_FS, { uNight: { value: 0 }, uColor: { value: new THREE.Color(0.2, 0.145, 0.08) } }, true);
     this.sigMat = lightMaterial(SIG_VS, SIG_FS, { uTime: { value: 0 } }, false);
     this.glow = new THREE.Mesh(this.glowGeo, this.glowMat);
     this.pool = new THREE.Mesh(this.poolGeo, this.poolMat);
@@ -504,9 +529,11 @@ export class FurnitureSystem {
     }
     this.glow.renderOrder = 5;
     this.pool.renderOrder = 4;
-    this.setInstances(this.glowGeo, 'aGlow', new Float32Array(0), 4);
-    this.setInstances(this.poolGeo, 'aPool', new Float32Array(0), 4);
-    this.setInstances(this.sigGeo, 'aSig', new Float32Array(0), 4);
+    this.setInstances(this.glowGeo, 'aGlow', [], 4);
+    this.instanceAttr(this.poolGeo, 'aPool', 0, 4);
+    this.instanceAttr(this.poolGeo, 'aPool2', 0, 4);
+    this.poolGeo.instanceCount = 0;
+    this.setInstances(this.sigGeo, 'aSig', [], 4);
   }
 
   private makeSlot(geo: THREE.BufferGeometry, mat: THREE.Material, cap: number, shadow: boolean): Slot {
@@ -559,13 +586,20 @@ export class FurnitureSystem {
       const slot = this.ensure(this.slots, t, n, this.models.geo[t], t === FT.Canopy ? this.matCanopy : this.matFurn, true);
       this.fill(slot, arrs, n);
       if (t === FT.Canopy) {
-        const cols = new Float32Array(Math.max(1, n) * 3);
+        // reuse the instance color buffer while it is large enough
+        let ic = slot.mesh.instanceColor;
+        if (!ic || ic.array.length < n * 3) {
+          ic = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(16, Math.ceil(n * 1.5)) * 3), 3);
+          slot.mesh.instanceColor = ic;
+        }
+        const cols = ic.array as Float32Array;
         let o = 0;
         for (const c of all) {
           cols.set(c.canopy, o);
           o += c.canopy.length;
         }
-        slot.mesh.instanceColor = new THREE.InstancedBufferAttribute(cols, 3);
+        ic.clearUpdateRanges();
+        ic.needsUpdate = true;
         const bare = this.bareSlot;
         if (n > bare.cap) {
           this.group.remove(bare.mesh);
@@ -579,17 +613,41 @@ export class FurnitureSystem {
       const li = LENS_OF[t as FT];
       if (li !== undefined) this.fill(this.ensure(this.lensSlots, li, n, this.models.lens[li], this.matLens, false), arrs, n);
     }
-    this.setInstances(this.glowGeo, 'aGlow', concat(all.map((c) => c.glows)), 4);
-    const pools = concat(all.map((c) => c.pools));
-    const np = pools.length / 8;
-    const p1 = new Float32Array(np * 4), p2 = new Float32Array(np * 4);
-    for (let i = 0; i < np; i++) {
-      p1.set(pools.subarray(i * 8, i * 8 + 4), i * 4);
-      p2.set(pools.subarray(i * 8 + 4, i * 8 + 8), i * 4);
+    this.setInstances(this.glowGeo, 'aGlow', all.map((c) => c.glows), 4);
+    // pools are stored interleaved (8 floats) and split into two vec4 attributes
+    let np = 0;
+    for (const c of all) np += c.pools.length / 8;
+    const a1 = this.instanceAttr(this.poolGeo, 'aPool', np, 4), a2 = this.instanceAttr(this.poolGeo, 'aPool2', np, 4);
+    const p1 = a1.array as Float32Array, p2 = a2.array as Float32Array;
+    let k = 0;
+    for (const c of all) {
+      const src = c.pools;
+      for (let i = 0; i < src.length; i += 8, k += 4) {
+        p1[k] = src[i];
+        p1[k + 1] = src[i + 1];
+        p1[k + 2] = src[i + 2];
+        p1[k + 3] = src[i + 3];
+        p2[k] = src[i + 4];
+        p2[k + 1] = src[i + 5];
+        p2[k + 2] = src[i + 6];
+        p2[k + 3] = src[i + 7];
+      }
     }
-    this.setInstances(this.poolGeo, 'aPool', p1, 4);
-    this.poolGeo.setAttribute('aPool2', new THREE.InstancedBufferAttribute(p2, 4));
-    this.setInstances(this.sigGeo, 'aSig', concat(all.map((c) => c.lenses)), 4);
+    a1.needsUpdate = a2.needsUpdate = true;
+    this.poolGeo.instanceCount = np;
+    this.setInstances(this.sigGeo, 'aSig', all.map((c) => c.lenses), 4);
+  }
+
+  /** instanced attribute with room for n items (reused while large enough; grows by 1.5×) */
+  private instanceAttr(geo: THREE.InstancedBufferGeometry, name: string, n: number, size: number): THREE.InstancedBufferAttribute {
+    let a = geo.getAttribute(name) as THREE.InstancedBufferAttribute | undefined;
+    if (!a || a.array.length < n * size) {
+      a = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(16, Math.ceil(n * 1.5)) * size), size);
+      a.setUsage(THREE.DynamicDrawUsage);
+      geo.setAttribute(name, a);
+    }
+    a.clearUpdateRanges();
+    return a;
   }
 
   private ensure(slots: Slot[], i: number, n: number, geo: THREE.BufferGeometry, mat: THREE.Material, shadow: boolean): Slot {
@@ -618,9 +676,19 @@ export class FurnitureSystem {
     slot.mesh.boundingBox = null;
   }
 
-  private setInstances(geo: THREE.InstancedBufferGeometry, name: string, data: Float32Array, size: number): void {
-    const n = data.length / size;
-    geo.setAttribute(name, new THREE.InstancedBufferAttribute(data.length ? data : new Float32Array(size), size));
+  /** concatenate per-chunk instance data into a reused attribute */
+  private setInstances(geo: THREE.InstancedBufferGeometry, name: string, parts: Float32Array[], size: number): void {
+    let len = 0;
+    for (const p of parts) len += p.length;
+    const n = len / size;
+    const a = this.instanceAttr(geo, name, n, size);
+    const dst = a.array as Float32Array;
+    let o = 0;
+    for (const p of parts) {
+      dst.set(p, o);
+      o += p.length;
+    }
+    a.needsUpdate = true;
     geo.instanceCount = n;
   }
 
@@ -646,16 +714,4 @@ export class FurnitureSystem {
     this.matCanopy.dispose();
     this.matLens.dispose();
   }
-}
-
-function concat(arrs: Float32Array[]): Float32Array {
-  let n = 0;
-  for (const a of arrs) n += a.length;
-  const out = new Float32Array(n);
-  let o = 0;
-  for (const a of arrs) {
-    out.set(a, o);
-    o += a.length;
-  }
-  return out;
 }

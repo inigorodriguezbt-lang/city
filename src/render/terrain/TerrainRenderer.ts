@@ -38,7 +38,7 @@ export class TerrainRenderer {
   readonly material: THREE.MeshStandardMaterial;
   readonly ringMaterial: THREE.MeshStandardMaterial;
   /** geometry LOD multiplier (distance/size ratio at which a node splits) */
-  lodFactor = 3.6;
+  lodFactor = 2.5;
   private ring: THREE.Mesh;
   private nodes = new Map<number, TNode>();
   private active = new Set<number>();
@@ -50,6 +50,8 @@ export class TerrainRenderer {
   private overlayMat: THREE.Material | null = null;
   private ringDirty = false;
   private leaves: number[] = [];
+  /** true until the first update(): the load-time "everything changed" flush is already reflected */
+  private fresh = true;
 
   constructor(readonly world: World, private readonly shared: SharedUniforms, detailNormal: THREE.Texture) {
     this.group.name = 'terrain';
@@ -96,7 +98,12 @@ export class TerrainRenderer {
 
   // ── change handling ─────────────────────────────────────────────────────
   onWorldChanged(rect: Rect, layers: number): void {
-    if (!(layers & (Layer.Terrain | Layer.Water))) return;
+    const full = rect.x0 <= 0 && rect.y0 <= 0 && rect.x1 >= this.world.size - 1 && rect.y1 >= this.world.size - 1;
+    if (this.fresh && full) return;
+    if (!(layers & (Layer.Terrain | Layer.Water))) {
+      if (layers & Layer.Tree) this.data.updateCanopy(rect);
+      return;
+    }
     this.data.update(rect);
     const s = this.world.size;
     if (rect.x0 <= 1 || rect.y0 <= 1 || rect.x1 >= s - 2 || rect.y1 >= s - 2) this.ringDirty = true;
@@ -140,6 +147,7 @@ export class TerrainRenderer {
   // ── per-frame LOD selection ─────────────────────────────────────────────
   update(camera: THREE.Camera, maxBuilds = 48): void {
     this.frame++;
+    this.fresh = false;
     if (this.ringDirty) {
       this.ringDirty = false;
       this.far.computeEdges();

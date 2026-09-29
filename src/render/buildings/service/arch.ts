@@ -437,7 +437,7 @@ export function portico(k: Kit, x: number, z: number, w: number, depth: number, 
 }
 
 /** geodesic glass dome (upper hemisphere of a subdivided icosahedron) */
-export function geodesicDome(k: Kit, x: number, y0: number, z: number, r: number, glass: ColorLike = 0xa9d4de, frame: ColorLike = 0xf0f2f4, detail = 2, sy = 1): void {
+export function geodesicDome(k: Kit, x: number, y0: number, z: number, r: number, glass: ColorLike = 0xa9d4de, frame: ColorLike = 0xf0f2f4, detail = 2, sy = 1, mat: MatKey = 'glass'): void {
   const geo = new THREE.IcosahedronGeometry(r, k.lo ? 1 : detail);
   const pos = geo.getAttribute('position') as THREE.BufferAttribute;
   const tris: number[] = [];
@@ -465,7 +465,7 @@ export function geodesicDome(k: Kit, x: number, y0: number, z: number, r: number
   const flat = g.toNonIndexed();
   flat.computeVertexNormals();
   k.push(new THREE.Matrix4().makeTranslation(x, y0, z));
-  k.addGeometry('glass', flat, glass);
+  k.addGeometry(mat, flat, glass);
   if (!k.lo) for (const [p, q] of edges.values()) k.beam('metal', [p.x, p.y, p.z], [q.x, q.y, q.z], 0.22, 0.22, frame);
   k.pop();
   g.dispose();
@@ -665,4 +665,66 @@ export function statueFigure(k: Kit, x: number, y: number, z: number, scale: num
   }
   k.pop();
   return y + 1.9 * scale;
+}
+
+/** Semicircular walk-through vault running along Z (depth), opening of `span`
+ *  whose arch springs at y = spring. Builds the intrados (inside faces) and the
+ *  front/back spandrels up to yTop, so it can sit between two piers. */
+export function archVault(k: Kit, cx: number, cz: number, span: number, depth: number, spring: number, yTop: number, mat: MatKey, color: ColorLike, soffit: ColorLike = shade(color, 0.82)): void {
+  const r = span / 2, n = k.seg(12);
+  const z0 = cz - depth / 2, z1 = cz + depth / 2;
+  const pt = (i: number): P2 => {
+    const a = Math.PI - (i / n) * Math.PI;
+    return [cx + Math.cos(a) * r, spring + Math.sin(a) * r];
+  };
+  let u = 0;
+  for (let i = 0; i < n; i++) {
+    const [ax, ay] = pt(i), [bx, by] = pt(i + 1);
+    const mx = (ax + bx) / 2, my = (ay + by) / 2;
+    const len = Math.hypot(bx - ax, by - ay);
+    // intrados faces the arch axis
+    k.quad(mat, { x: ax, y: ay, z: z0 }, { x: bx, y: by, z: z0 }, { x: bx, y: by, z: z1 }, { x: ax, y: ay, z: z1 }, [[u, z0], [u + len, z0], [u + len, z1], [u, z1]], soffit, { x: cx - mx, y: spring - my, z: 0 });
+    u += len;
+    // spandrels (front and back): fill up to yTop, left half to the left corner, right half to the right
+    const cxr = i < n / 2 ? cx - r : cx + r;
+    for (const [zz, f] of [[z1, 1], [z0, -1]] as [number, number][]) {
+      k.tri(mat, { x: ax, y: ay, z: zz }, { x: bx, y: by, z: zz }, { x: cxr, y: yTop, z: zz }, [ax, ay], [bx, by], [cxr, yTop], color, { x: 0, y: 0, z: f });
+      if (i === Math.floor(n / 2) - 1 || (n % 2 === 1 && i === Math.floor(n / 2)))
+        k.tri(mat, { x: bx, y: by, z: zz }, { x: cx + r, y: yTop, z: zz }, { x: cx - r, y: yTop, z: zz }, [bx, by], [cx + r, yTop], [cx - r, yTop], color, { x: 0, y: 0, z: f });
+    }
+  }
+  // voussoir band + keystone on the front face
+  if (!k.lo) {
+    for (let i = 0; i < n; i++) {
+      const [ax, ay] = pt(i), [bx, by] = pt(i + 1);
+      const nx0 = (ax - cx) / r, ny0 = (ay - spring) / r, nx1 = (bx - cx) / r, ny1 = (by - spring) / r;
+      k.beam('plain', [ax + nx0 * 0.45, ay + ny0 * 0.45, z1 + 0.12], [bx + nx1 * 0.45, by + ny1 * 0.45, z1 + 0.12], 0.9, 0.24, shade(color, 1.06));
+    }
+    k.box('plain', cx, spring + r - 0.2, z1 + 0.05, 1.2, 1.8, 0.4, shade(color, 1.08));
+  }
+}
+
+/** Pointed Gothic lancet window on a +Z facing plane (equilateral arch), bottom at y. */
+export function lancet(k: Kit, x: number, y: number, z: number, w: number, h: number, glass: ColorLike, frame: ColorLike, mat: MatKey = 'emissive'): void {
+  const rise = w * 0.866, rect = Math.max(0.1, h - rise);
+  k.box(mat, x, y, z, w, rect, 0.06, glass, { top: false });
+  const n = k.lo ? 3 : 6;
+  const yb = y + rect;
+  const L = (i: number): P2 => { const a = Math.PI - (i / n) * (Math.PI / 3); return [x + w / 2 + Math.cos(a) * w, yb + Math.sin(a) * w]; };
+  const R = (i: number): P2 => { const a = (i / n) * (Math.PI / 3); return [x - w / 2 + Math.cos(a) * w, yb + Math.sin(a) * w]; };
+  for (let i = 0; i < n; i++) {
+    const [ax, ay] = L(i), [bx, by] = L(i + 1), [cx2, cy] = R(i), [dx, dy] = R(i + 1);
+    k.tri(mat, { x, y: yb, z: z + 0.03 }, { x: ax, y: ay, z: z + 0.03 }, { x: bx, y: by, z: z + 0.03 }, [0, 0], [1, 0], [1, 1], glass, { x: 0, y: 0, z: 1 });
+    k.tri(mat, { x, y: yb, z: z + 0.03 }, { x: cx2, y: cy, z: z + 0.03 }, { x: dx, y: dy, z: z + 0.03 }, [0, 0], [1, 0], [1, 1], glass, { x: 0, y: 0, z: 1 });
+    if (!k.lo) {
+      k.beam('plain', [ax, ay, z + 0.02], [bx, by, z + 0.02], 0.22, 0.16, frame);
+      k.beam('plain', [cx2, cy, z + 0.02], [dx, dy, z + 0.02], 0.22, 0.16, frame);
+    }
+  }
+  if (!k.lo) {
+    k.box('plain', x - w / 2 - 0.11, y, z, 0.22, rect, 0.16, frame, { top: false });
+    k.box('plain', x + w / 2 + 0.11, y, z, 0.22, rect, 0.16, frame, { top: false });
+    k.box('plain', x, y, z + 0.06, 0.12, rect, 0.06, frame, { top: false });
+    k.box('plain', x, y - 0.25, z + 0.05, w + 0.5, 0.25, 0.3, frame);
+  }
 }

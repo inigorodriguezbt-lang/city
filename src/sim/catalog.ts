@@ -65,10 +65,11 @@ export function unlockedAt(index: number): BuildingDef[] {
   return BUILDINGS.filter((d) => d.unlock === index);
 }
 
-export function cheapestUnlocked(world: World, cat: BuildingCategory): BuildingDef | undefined {
+export function cheapestUnlocked(world: World, cat: BuildingCategory, pred?: (d: BuildingDef) => boolean): BuildingDef | undefined {
   let best: BuildingDef | undefined;
   for (const d of BUILDINGS) {
     if (d.category !== cat || !world.isUnlocked(d.unlock, d.id)) continue;
+    if (pred && !pred(d)) continue;
     if (!best || d.cost < best.cost) best = d;
   }
   return best;

@@ -22,6 +22,10 @@ const NK = PROP_KINDS.length;
 const ROCK = PROP_KINDS.indexOf('rock');
 const CONIFER = new Set<PropKind>(['pine', 'spruce', 'cypress']);
 const TIERS = 3;
+/** instances closer than this (m) use the detailed model */
+const LOD0_DIST = 240;
+/** camera travel (m) after which blocks with detailed trees re-sort their LODs */
+const LOD0_RESORT = 40;
 
 interface ChunkProps {
   /** per kind: packed instance data */
@@ -45,6 +49,10 @@ interface Block {
   by: number;
   meshes: (BlockMesh | null)[]; // index tier * NK + kind
   dirty: boolean;
+  /** camera position at the last assembly (per-instance LOD split) */
+  camAt: THREE.Vector3;
+  /** true when the block holds near chunks (detailed models) */
+  hasNear: boolean;
 }
 
 export interface TreeViewParams {
@@ -75,8 +83,11 @@ export class TreeRenderer {
   constructor(readonly world: World, shared: SharedUniforms) {
     this.group.name = 'props';
     this.uniforms = createPropUniforms();
-    const rt = this.uniforms.uRockTint.value.set(world.theme.rock).multiplyScalar(1 / 0.2);
-    rt.setRGB(Math.min(1.6, Math.max(0.5, rt.r)), Math.min(1.6, Math.max(0.5, rt.g)), Math.min(1.6, Math.max(0.5, rt.b)));
+    // tint the neutral boulder model toward the theme's rock colour (terrain albedo scale included)
+    const base = new THREE.Color('#8c877e');
+    const rt = this.uniforms.uRockTint.value.set(world.theme.rock).multiplyScalar(0.86);
+    const cl = (v: number) => Math.min(1.5, Math.max(0.5, v));
+    rt.setRGB(cl(rt.r / base.r), cl(rt.g / base.g), cl(rt.b / base.b));
     this.material = createPropMaterial(this.uniforms, shared);
     this.depthMaterial = createPropDepthMaterial(this.uniforms, shared);
     this.models = buildPropModels();
@@ -86,7 +97,7 @@ export class TreeRenderer {
     for (let i = 0; i < this.chunks.length; i++) this.dirtyChunks.add(i);
     this.blocks = [];
     for (let by = 0; by < this.bps; by++)
-      for (let bx = 0; bx < this.bps; bx++) this.blocks.push({ bx, by, meshes: new Array(TIERS * NK).fill(null), dirty: true });
+      for (let bx = 0; bx < this.bps; bx++) this.blocks.push({ bx, by, meshes: new Array(TIERS * NK).fill(null), dirty: true, camAt: new THREE.Vector3(), hasNear: false });
     this.noises = PROP_KINDS.map((_, i) => new Noise((world.settings.seed + 7919 * (i + 1)) >>> 0));
     this.themeKinds = world.theme.trees.slice();
   }
@@ -129,8 +140,9 @@ export class TreeRenderer {
         if (!initial && performance.now() - t0 > budgetMs) break;
       }
     }
-    // 2. chunk tiers from camera distance (with hysteresis)
-    const nearD = 460, midD = Math.max(900, Math.min(p.shadowRadius, 1600)), farD = p.radius;
+    // 2. chunk tiers from camera distance (with hysteresis). Tier 0 chunks
+    //    split per instance between the detailed and the low model.
+    const nearD = LOD0_DIST + 30, midD = Math.max(900, Math.min(p.shadowRadius, 1600)), farD = p.radius;
     for (let k = 0; k < this.chunks.length; k++) {
       const c = this.chunks[k];
       if (!c) continue;
@@ -148,7 +160,9 @@ export class TreeRenderer {
         this.blockOf(k).dirty = true;
       }
     }
-    // 3. re-assemble dirty blocks (nearest first, bounded)
+    // 3. re-assemble dirty blocks (nearest first, bounded); blocks with
+    //    detailed trees refresh their per-instance LOD split as the camera moves
+    for (const b of this.blocks) if (b.hasNear && !b.dirty && b.camAt.distanceToSquared(cam) > LOD0_RESORT * LOD0_RESORT) b.dirty = true;
     const dirty = this.blocks.filter((b) => b.dirty);
     if (dirty.length) {
       const bs = BLOCK * CHUNK * CELL;
@@ -272,6 +286,8 @@ export class TreeRenderer {
   // ── block assembly ──────────────────────────────────────────────────────
   private assemble(b: Block, cam: THREE.Vector3): void {
     b.dirty = false;
+    b.camAt.copy(cam);
+    b.hasNear = false;
     const cps = this.cps;
     const counts = new Array(TIERS * NK).fill(0);
     const members: { c: ChunkProps; tier: number; keep: number; scale: number }[] = [];
@@ -293,7 +309,13 @@ export class TreeRenderer {
         members.push({ c, tier, keep, scale });
         minH = Math.min(minH, c.minH);
         maxH = Math.max(maxH, c.maxH);
-        for (let k = 0; k < NK; k++) counts[tier * NK + k] += Math.ceil(c.counts[k] * Math.min(1, keep));
+        if (tier === 0) b.hasNear = true;
+        for (let k = 0; k < NK; k++) {
+          const cnt = Math.ceil(c.counts[k] * Math.min(1, keep));
+          counts[tier * NK + k] += cnt;
+          // near chunks may route any instance to the low model (tier 1 slot)
+          if (tier === 0) counts[NK + k] += cnt;
+        }
       }
     const bs = BLOCK * CHUNK * CELL;
     for (let tier = 0; tier < TIERS; tier++)
@@ -316,14 +338,22 @@ export class TreeRenderer {
         }
         const P = bm.iPos.array as Float32Array, D = bm.iData.array as Float32Array;
         let n = 0;
+        const lod0 = LOD0_DIST * LOD0_DIST;
         for (const m of members) {
-          if (m.tier !== tier) continue;
+          // tier-0 chunks feed both the detailed slot (near instances) and the low slot (the rest)
+          if (m.tier !== tier && !(tier === 1 && m.tier === 0)) continue;
+          const split = m.tier === 0;
           const src = m.c.data[k];
           const total = m.c.counts[k];
           const lim = m.keep >= 1 ? total : Math.ceil(total * m.keep);
           for (let i = 0; i < lim; i++) {
             const o = i * STRIDE;
             if (src[o + 7] > m.keep) break;
+            if (split) {
+              const dx = src[o] - cam.x, dy = src[o + 1] - cam.y, dz = src[o + 2] - cam.z;
+              const near = dx * dx + dy * dy + dz * dz < lod0;
+              if (near !== (tier === 0)) continue;
+            }
             const q = n * 4;
             P[q] = src[o];
             P[q + 1] = src[o + 1];

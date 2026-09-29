@@ -11,7 +11,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import type { Game } from '../game/Game';
 import type { World } from '../world/World';
-import { BFlag, Layer, type Building, type BudgetCategory, type TaxCategory, type ZoneCategory } from '../core/types';
+import { BFlag, Layer, RoadType, type Building, type BudgetCategory, type TaxCategory, type ZoneCategory } from '../core/types';
 import { DAYS_PER_MONTH, DAYS_PER_YEAR, START_YEAR, TICKS_PER_DAY } from '../core/constants';
 import { calendar } from '../core/time';
 import { policyDef } from '../data/policies';
@@ -19,7 +19,7 @@ import { achievementDef, ACHIEVEMENTS } from '../data/achievements';
 import { DayAgg } from './aggregates';
 import { SimContext, neutralMods } from './context';
 import { loadSimState, type CityRates } from './state';
-import { SimClock, MAX_TICKS_PER_FRAME } from './time';
+import { SimClock, MAX_BACKLOG_TICKS, MAX_TICKS_PER_FRAME } from './time';
 import { Growth } from './growth';
 import { updateZoned, vacancyOf, isResidentialZone } from './lifecycle';
 import { settleStorage, updateService } from './services';
@@ -31,7 +31,9 @@ import { Chirper } from './chirper';
 import { Advisor, type AdvisorTip } from './advisor';
 import { buildingInfo, citizenNames } from './info';
 import { buildingTitle } from './naming';
+import { defOf } from './catalog';
 import { CANDIDATE_CHUNKS_PER_TICK } from './tuning';
+import { perksFromWorld, type Perks } from './perks';
 import type { Effects } from './policies';
 
 export interface InfoLine {
@@ -89,7 +91,13 @@ export class Simulation {
   onWorldLoaded(world: World): void {
     this.onWorldUnloaded();
     this.world = world;
+    const fresh = world.ext.sim === undefined;
     const state = loadSimState(world);
+    // the regional highway / railway the map starts with is maintained by the state
+    if (fresh && world.time.day < 1) {
+      const road = world.road;
+      for (let i = 0; i < road.length; i++) if (road[i] === RoadType.Highway || road[i] === RoadType.Rail) state.stateRoads.push(i);
+    }
     const ctx = new SimContext(this.game, world, state);
     this.ctx = ctx;
     this.clock = new SimClock(world);
@@ -103,29 +111,39 @@ export class Simulation {
     if (!Number.isFinite(world.time.hour)) world.time.hour = 9;
     ctx.candidates.fullScan();
     ctx.outside.recompute();
+    ctx.perks = perksFromWorld(world);
     this.economy.recountRoads();
     ctx.idsDirty = true;
     ctx.onLevel5 = (b) => this.chirper?.queue('level5', {}, b);
     ctx.onServiceOpened = (b) => {
-      this.chirper?.queue('new_service', { building: buildingTitle(b) }, b);
+      const cat = defOf(b.defId)?.category;
+      this.chirper?.queue(cat === 'landmark' || cat === 'monument' ? 'landmark' : 'new_service', { building: buildingTitle(b) }, b);
       ctx.refreshServiceFields();
     };
     // existing buildings from older saves get default per-building state lazily (bsim)
     const ev = this.game.events;
     this.offs.push(
       ev.on('world:changed', ({ rect, layers }) => {
-        if (layers & (Layer.Zone | Layer.Building | Layer.Road | Layer.Terrain | Layer.Water)) ctx.candidates.markRect(rect, 1);
+        // building layer changes are mostly visual (touchBuilding); additions and removals are handled below,
+        // so cells that cannot host a lot are not re-added every time a neighbour levels up
+        if (layers & (Layer.Zone | Layer.Road | Layer.Terrain | Layer.Water)) {
+          ctx.candidates.markRect(rect, 1, (layers & (Layer.Road | Layer.Terrain | Layer.Water)) !== 0);
+        }
         if (layers & Layer.Road) {
           ctx.roadsDirty = true;
           ctx.outside.dirty = true;
         }
+        if (layers & Layer.District) ctx.policies.sync();
       }),
-      ev.on('building:added', () => {
+      ev.on('building:added', (b) => {
         ctx.idsDirty = true;
+        const size = world.size;
+        for (let y = Math.max(0, b.y); y < Math.min(size, b.y + b.h); y++)
+          for (let x = Math.max(0, b.x); x < Math.min(size, b.x + b.w); x++) ctx.candidates.remove(y * size + x);
       }),
       ev.on('building:removed', (b) => {
         ctx.idsDirty = true;
-        ctx.candidates.markRect({ x0: b.x, y0: b.y, x1: b.x + b.w - 1, y1: b.y + b.h - 1 }, 1);
+        ctx.candidates.markRect({ x0: b.x, y0: b.y, x1: b.x + b.w - 1, y1: b.y + b.h - 1 }, 1, true);
       }),
       ev.on('unlocks:changed', () => {
         ctx.refreshServiceFields();
@@ -145,6 +163,8 @@ export class Simulation {
           this.chirper?.queue('disaster', { event: def.name.toLowerCase() }, target);
         } else if (def.severity === 'good') {
           this.chirper?.queue('event_good', { event: def.name }, target);
+        } else if (def.severity === 'warning' || def.severity === 'danger') {
+          this.chirper?.queue('event_bad', { event: def.name.toLowerCase() }, target);
         }
       }),
     );
@@ -175,6 +195,9 @@ export class Simulation {
     const now = clock.advance(Math.max(0, dt), this.game.settings.value.gameplay.dayCycleMinutes);
     let budget = MAX_TICKS_PER_FRAME;
     while (clock.lastTick < now && budget-- > 0) this.runTick(++clock.lastTick);
+    // the machine cannot keep up at this speed: the calendar waits for the simulation
+    // instead of piling up an ever-growing backlog of ticks
+    if (now - clock.lastTick > MAX_BACKLOG_TICKS) w.time.day = (clock.lastTick + MAX_BACKLOG_TICKS + 0.5) / TICKS_PER_DAY;
   }
 
   get speed(): number {
@@ -349,7 +372,7 @@ export class Simulation {
       const b = w.getBuilding(id);
       if (!b) continue;
       w.removeBuilding(id);
-      ctx.candidates.markRect({ x0: b.x, y0: b.y, x1: b.x + b.w - 1, y1: b.y + b.h - 1 }, 1);
+      ctx.candidates.markRect({ x0: b.x, y0: b.y, x1: b.x + b.w - 1, y1: b.y + b.h - 1 }, 1, true);
     }
     ctx.idsDirty = true;
   }
@@ -377,6 +400,7 @@ export class Simulation {
       }
       if (day % DAYS_PER_YEAR === 0) this.game.events.emit('sim:year', { year: START_YEAR + day / DAYS_PER_YEAR });
     }
+    ctx.policies.sync();
     // snapshot of buildings processed today (insertion order = stable slices)
     ctx.ids = Array.from(w.buildings.keys());
     ctx.idsDirty = false;
@@ -400,6 +424,7 @@ export class Simulation {
       ctx.last = a;
       ctx.lastValid = true;
       writeStats(ctx, a);
+      ctx.perks = a.perks.resolve();
       rollCounts(ctx, a, dtDays);
       this.why = updateDemand(ctx, a, dtDays);
       st.ledger = this.economy!.buildLedger(a, exportDuty(this.flows));
@@ -464,6 +489,11 @@ export class Simulation {
     return this.ctx ? this.ctx.policies.at(b).fireRisk : 1;
   }
 
+  /** city-wide perks currently granted by special service buildings (tax office, courthouse…) */
+  get perks(): Perks | null {
+    return this.ctx?.perks ?? null;
+  }
+
   /** construction is frozen while bankrupt (money < 0 for 3 months) */
   get bankrupt(): boolean {
     return this.economy?.bankrupt ?? false;
@@ -504,7 +534,12 @@ export class Simulation {
   // ════════════════════════════════════════════════════════════════════════
 
   setTax(cat: TaxCategory, rate: number): void {
+    const before = this.world?.economy.taxes[cat];
     this.economy?.setTax(cat, rate);
+    const after = this.world?.economy.taxes[cat];
+    if (before !== undefined && after !== undefined && Math.abs(after - before) >= 0.005 && (this.world?.stats.population ?? 0) > 200) {
+      this.chirper?.queue(after > before ? 'tax_raise' : 'tax_cut');
+    }
     if (this.world && this.economy) this.world.stats.netIncome = Math.round(this.economy.projectedNet());
   }
 
@@ -517,6 +552,7 @@ export class Simulation {
     if (!this.economy) return false;
     const r = this.economy.takeLoan(amount, years);
     this.lastError = r.reason ?? '';
+    if (r.ok) this.chirper?.queue('loan');
     return r.ok;
   }
 

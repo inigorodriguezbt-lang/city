@@ -33,6 +33,8 @@ const fs = require('fs');
         r.applySettings(s);
       }
       if (v.cam) r.cameraCtl.setPose(v.cam[0], v.cam[1], v.cam[2], (v.cam[3] * Math.PI) / 180, (v.cam[4] * Math.PI) / 180);
+      if (!v.blend) r.snapTransitions();
+      if (v.eval) new Function('r', 'w', v.eval)(r, w);
       window.__mark = window.__frames;
       window.__pause = false;
     }, v);

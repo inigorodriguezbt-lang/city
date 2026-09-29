@@ -46,6 +46,8 @@ export const SPAWN_SAMPLES = 4;
 export const RESOURCE_THRESHOLD = 60;
 /** chunk rows rescanned per tick for the candidate set */
 export const CANDIDATE_CHUNKS_PER_TICK = 12;
+/** days a cell that fits no lot is skipped (unless something changes nearby) */
+export const UNFIT_RETRY_DAYS = 45;
 /** days between densification attempts per category */
 export const DENSIFY_INTERVAL = 3;
 
@@ -106,14 +108,15 @@ export const DEATHCARE_PICKUP_MIN = 25;
 // ── economy ─────────────────────────────────────────────────────────────────
 /** $ per occupant per month at a 10 % tax rate, level 1, average land value */
 export const TAX_BASE: Record<TaxCategory, number> = {
-  resLow: 1.6,
-  resHigh: 1.45,
-  comLow: 2.4,
-  comHigh: 2.6,
-  office: 2.9,
-  industry: 2.1,
+  resLow: 1.2,
+  resHigh: 1.1,
+  comLow: 1.8,
+  comHigh: 1.95,
+  office: 2.15,
+  industry: 1.58,
 };
-export const LEVEL_TAX = [0, 1, 1.3, 1.7, 2.2, 2.8];
+/** tax multiplier per building level */
+export const LEVEL_TAX = [0, 1, 1.25, 1.55, 1.9, 2.3];
 export const TAX_MIN = 0;
 export const TAX_MAX = 0.29;
 export const BUDGET_MIN = 0.5;
@@ -148,7 +151,7 @@ export interface LoanTier {
 export const LOAN_TIERS: LoanTier[] = [
   { amount: 50_000, years: 5, rate: 0.05, unlock: 0 },
   { amount: 150_000, years: 10, rate: 0.07, unlock: 0 },
-  { amount: 400_000, years: 20, rate: 0.09, unlock: 3 },
+  { amount: 400_000, years: 20, rate: 0.09, unlock: 0 },
   { amount: 1_200_000, years: 25, rate: 0.095, unlock: 6 },
   { amount: 4_000_000, years: 30, rate: 0.1, unlock: 9 },
 ];

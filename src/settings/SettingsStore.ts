@@ -219,8 +219,11 @@ export class SettingsStore {
       const vals = GRAPHICS_PRESETS[preset];
       for (const k of PRESET_KEYS) if (!(isObj(g) && k in g)) (this.value.graphics as unknown as Obj)[k] = vals[k];
       changed = true;
-    } else if (touchesPreset && !explicitPreset && preset !== 'custom') {
-      this.value.graphics.preset = 'custom';
+    } else if (touchesPreset && !explicitPreset) {
+      // an individual quality option changed: "custom" — unless the values now
+      // happen to match a named preset exactly again
+      this.value.graphics.preset = this.matchingPreset() ?? 'custom';
+      changed = true;
     }
     if (!changed && !touchesPreset) return;
     this.save();

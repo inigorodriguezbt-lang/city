@@ -815,9 +815,10 @@ export function conveyor(k: Kit, a: V3, b: V3, w = 2, color: ColorLike = 0xb8a57
 /** material pile (coal, ore, gravel, wood chips) */
 export function pile(k: Kit, x: number, z: number, rx: number, rz: number, h: number, color: ColorLike, seed = 0): void {
   const segs = k.seg(14);
-  const prof: P2[] = [[1, 0], [0.8, 0.35], [0.5, 0.75], [0.2, 0.96], [0, 1]];
-  k.rev('dirt', x, 0, z, prof.map(([r, y]) => [r, y * h] as P2), color, segs, { sx: rx, sz: rz, crease: 80 });
-  void seed;
+  // the seed skews the shoulder of the heap so neighbouring piles differ
+  const s = 0.7 + ((Math.sin(seed * 12.9898) * 43758.5453) % 1 + 1) % 1 * 0.2;
+  const prof: P2[] = [[1, 0], [s, 0.35], [s * 0.62, 0.75], [0.2, 0.96], [0, 1]];
+  k.rev('dirt', x, 0, z, prof.map(([r, y]) => [r, y * h] as P2), color, segs, { sx: rx, sz: rz, crease: 80, a0: seed, a1: seed + Math.PI * 2 });
 }
 
 /** log pile (logs along X) */

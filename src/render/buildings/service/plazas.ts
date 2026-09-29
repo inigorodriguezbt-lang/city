@@ -12,7 +12,7 @@ function square(k: Kit, color: number, border: number): void {
 }
 
 /** tiered fountain with emitters and night uplights */
-function fountain(k: Kit, x: number, z: number, r: number, stone: number): number {
+export function fountain(k: Kit, x: number, z: number, r: number, stone: number): number {
   const seg = k.seg(24);
   k.cyl('concrete', x, 0, z, r, r, 0.7, stone, seg, false);
   k.ring('concrete', x, 0.7, z, r - 0.5, r, shade(stone, 1.05), seg);
@@ -34,7 +34,7 @@ function fountain(k: Kit, x: number, z: number, r: number, stone: number): numbe
 }
 
 /** bandstand / gazebo: octagonal platform, slim columns, ogee roof */
-function pavilion(k: Kit, x: number, z: number, r: number, h: number, base: number, color: number, roof: number, rails = true): number {
+export function pavilion(k: Kit, x: number, z: number, r: number, h: number, base: number, color: number, roof: number, rails = true): number {
   const n = 8;
   k.cyl('wall_stone', x, 0, z, r + 0.3, r + 0.3, base, shade(color, 0.85), n);
   if (base > 0.5) k.stairs(x, z + r + 1.1, 2.4, base, shade(color, 0.85), 0.17, 0.32);

@@ -5,6 +5,8 @@ import type { World } from '../world/World';
 
 /** Max fixed ticks processed in one frame (catch-up is spread over frames). */
 export const MAX_TICKS_PER_FRAME = 12;
+/** Ticks the calendar may run ahead of the processed simulation before it is held back. */
+export const MAX_BACKLOG_TICKS = 2 * TICKS_PER_DAY;
 
 export class SimClock {
   /** last processed global tick (tick t covers day floor(t / TICKS_PER_DAY), slice t % TICKS_PER_DAY) */

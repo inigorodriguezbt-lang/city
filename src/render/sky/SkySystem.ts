@@ -202,6 +202,12 @@ export class SkySystem {
     this.envDirty = true;
   }
 
+  /** jump straight to the current weather/time look on the next update (no blending) */
+  snap(): void {
+    this.initialized = false;
+    this.envDirty = true;
+  }
+
   update(ctx: SkyUpdateContext): void {
     const { world, dt } = ctx;
     const theme: ThemeDef | null = world ? world.theme : null;
@@ -210,8 +216,11 @@ export class SkySystem {
     const cal = calendar(day);
     const yp = cal.yearProgress + ((day % 1) + 1) % 1 / 360;
     const lat = theme ? THEME_LATITUDE[theme.id] : 42;
-    if (theme) this.grassLinear.set(theme.grass);
-    else this.grassLinear.setRGB(0.12, 0.2, 0.07);
+    if (theme) {
+      // average ground albedo for bounce light: arid biomes read as dry grass and sand
+      const arid = 1 - theme.rainfall;
+      this.grassLinear.set(theme.grass).lerp(_c.set(theme.grassDry), arid * 0.8).lerp(_c.set(theme.sand), arid * arid * 0.6);
+    } else this.grassLinear.setRGB(0.12, 0.2, 0.07);
 
     // ── weather smoothing ─────────────────────────────────────────────────
     const weather = world?.weather;
@@ -263,7 +272,7 @@ export class SkySystem {
     const moonUp = THREE.MathUtils.smoothstep(this.moonDir.y, -0.03, 0.06);
     const clouded = 1 - 0.84 * lw.overcast;
     const sunIntensity = 3.6 * sunUp * clouded;
-    const moonIntensity = 0.26 * (0.25 + 0.75 * moonIllum) * moonUp * (1 - 0.85 * lw.overcast) * (1 - sunUp);
+    const moonIntensity = 0.38 * (0.25 + 0.75 * moonIllum) * moonUp * (1 - 0.85 * lw.overcast) * (1 - sunUp);
 
     const daylight = THREE.MathUtils.smoothstep(sunDir.y, -0.1, 0.3) * (1 - 0.35 * lw.overcast);
     let night = 1 - THREE.MathUtils.smoothstep(sunDir.y, -0.075, 0.07);
@@ -310,7 +319,7 @@ export class SkySystem {
       this.skyAmbient.copy(amb);
     }
     // night floor: moonlit / airglow sky so night is readable, not black
-    this.nightSky.setRGB(0.0035, 0.0055, 0.012).multiplyScalar(1 + 3.5 * moonIllum * moonUp);
+    this.nightSky.setRGB(0.0038, 0.007, 0.0165).multiplyScalar(1 + 3.0 * moonIllum * moonUp);
     const ambient = this.lighting.ambientColor.copy(this.skyAmbient).add(_c.copy(this.nightSky).multiplyScalar(3));
     // overcast greys the ambient, keeps most of its energy
     const ambLum = lum(ambient);
@@ -365,7 +374,9 @@ export class SkySystem {
     su.uMoonColor.value.copy(this.moonT).multiply(_c2.setRGB(0.95, 0.97, 1.0)).multiplyScalar(0.06 * moonUp);
     su.uMoonGlow.value = (0.3 + 0.7 * moonIllum) * (1 - sunUp) * (1 + lw.turbidity * 0.3);
     su.uNightSky.value.copy(this.nightSky);
-    su.uStars.value = night * (1 - lw.overcast) * (1 - 0.55 * moonIllum * moonUp) * (1 - 0.5 * cityGlow) * (1 - Math.min(1, (lw.fog - 1) * 0.3));
+    // stars only once civil twilight is over (sun ~4-11 degrees below the horizon)
+    const starNight = 1 - THREE.MathUtils.smoothstep(sunDir.y, -0.19, -0.07);
+    su.uStars.value = starNight * (1 - lw.overcast) * (1 - 0.55 * moonIllum * moonUp) * (1 - 0.5 * cityGlow) * (1 - Math.min(1, (lw.fog - 1) * 0.3));
     _v2.set(0, Math.sin(lat * Math.PI / 180), -Math.cos(lat * Math.PI / 180));
     _m4.makeRotationAxis(_v2, ((hour / 24) + yp) * Math.PI * 2);
     su.uStarRot.value.setFromMatrix4(_m4);
@@ -396,7 +407,7 @@ export class SkySystem {
 
     // exposure & bloom adaptation
     const lightLevel = sunIntensity * Math.max(0.15, sunDir.y) + lum(ambient) * 3;
-    this.exposure = THREE.MathUtils.clamp(0.95 / Math.pow(Math.max(lightLevel, 0.02) / 2.2, 0.28), 0.9, 3.0);
+    this.exposure = THREE.MathUtils.clamp(0.95 / Math.pow(Math.max(lightLevel, 0.02) / 2.2, 0.28), 0.9, 3.4);
     this.bloomThreshold = THREE.MathUtils.lerp(3.2, 0.9, night);
 
     // ── environment map ───────────────────────────────────────────────────

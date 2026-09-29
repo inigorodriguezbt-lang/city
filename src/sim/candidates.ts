@@ -37,6 +37,10 @@ export class CandidateSet {
   private readonly dirty: Uint8Array;
   private queue: number[] = [];
   private qHead = 0;
+  /** day until which a cell is known not to fit any lot (0 = unknown) */
+  private readonly unfit: Int32Array;
+  /** zone the cell had when it was found unfit (a repaint gives it a new chance) */
+  private readonly unfitZone: Uint8Array;
 
   constructor(private world: World) {
     this.size = world.size;
@@ -45,6 +49,22 @@ export class CandidateSet {
     this.cat = new Int8Array(n).fill(-1);
     this.chunksX = Math.ceil(this.size / CHUNK);
     this.dirty = new Uint8Array(this.chunksX * this.chunksX);
+    this.unfit = new Int32Array(n);
+    this.unfitZone = new Uint8Array(n);
+  }
+
+  private get today(): number {
+    return Math.floor(this.world.time.day);
+  }
+
+  /**
+   * No lot fits at cell i right now: drop it until something changes nearby
+   * (see markRect) or `days` have passed, so growth stops re-sampling it.
+   */
+  markUnfit(i: number, days: number): void {
+    this.remove(i);
+    this.unfit[i] = this.today + days;
+    this.unfitZone[i] = this.world.zone[i];
   }
 
   count(c: number): number {
@@ -61,6 +81,7 @@ export class CandidateSet {
     const w = this.world;
     const z = w.zone[i];
     if (!z || w.road[i] || w.bldg[i]) return -1;
+    if (this.unfit[i] > this.today && this.unfitZone[i] === z) return -1;
     const c = ZONE_CAT[z];
     if (c < 0) return -1;
     let access = false;
@@ -121,6 +142,7 @@ export class CandidateSet {
   }
 
   fullScan(): void {
+    this.unfit.fill(0);
     for (let c = 0; c < 4; c++) this.lens[c] = 0;
     this.pos.fill(-1);
     this.cat.fill(-1);
@@ -134,8 +156,18 @@ export class CandidateSet {
     this.qHead = 0;
   }
 
-  /** queue the chunks overlapping rect (padded) for a budgeted rescan */
-  markRect(r: Rect, pad = 1): void {
+  /**
+   * Queue the chunks overlapping rect (padded) for a budgeted rescan. With
+   * `retryUnfit`, cells within a lot's reach of the change (a demolished
+   * building, a new road) get another chance to host a lot.
+   */
+  markRect(r: Rect, pad = 1, retryUnfit = false): void {
+    if (retryUnfit) {
+      const reach = 4;
+      const ux0 = Math.max(0, r.x0 - reach), uy0 = Math.max(0, r.y0 - reach);
+      const ux1 = Math.min(this.size - 1, r.x1 + reach), uy1 = Math.min(this.size - 1, r.y1 + reach);
+      for (let y = uy0; y <= uy1; y++) this.unfit.fill(0, y * this.size + ux0, y * this.size + ux1 + 1);
+    }
     const cx0 = Math.max(0, Math.floor((r.x0 - pad) / CHUNK));
     const cy0 = Math.max(0, Math.floor((r.y0 - pad) / CHUNK));
     const cx1 = Math.min(this.chunksX - 1, Math.floor((r.x1 + pad) / CHUNK));

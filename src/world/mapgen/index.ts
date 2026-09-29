@@ -6,8 +6,9 @@
 // build works); progress labels are streamed back ("Shaping continents",
 // "Eroding mountains", "Carving rivers", …), typed arrays are transferred (no
 // copies) and the worker is terminated afterwards. Output is deterministic for
-// the same settings + seed. If workers are unavailable (very old browsers,
-// restrictive CSP) the same pipeline runs on the main thread.
+// the same settings + seed. If workers are unavailable or fail to start (very
+// old browsers, restrictive CSP on blob: workers) the same pipeline runs on
+// the main thread and produces the identical map.
 // ─────────────────────────────────────────────────────────────────────────────
 import type { GeneratedMap, MapSettings } from '../../core/types';
 import { WorkerRPC } from '../../core/rpc';
@@ -24,8 +25,17 @@ export async function generateMap(settings: MapSettings, onProgress?: (p: number
     console.warn('[mapgen] worker unavailable, generating on the main thread', err);
   }
   if (rpc) {
+    let started = false;
     try {
-      return await rpc.call<GeneratedMap>('generate', args, [], (p, msg) => onProgress?.(p, msg ?? ''));
+      return await rpc.call<GeneratedMap>('generate', args, [], (p, msg) => {
+        started = true;
+        onProgress?.(p, msg ?? '');
+      });
+    } catch (err) {
+      // a worker that never reported progress failed to load (CSP, blob URLs
+      // blocked…): fall back below. Errors from inside the pipeline propagate.
+      if (started) throw err;
+      console.warn('[mapgen] worker failed to start, generating on the main thread', err);
     } finally {
       rpc.terminate();
     }

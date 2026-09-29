@@ -10,7 +10,11 @@
 //    highway, ending ~30-50 % into the map beside buildable land.
 //  • Terrain along both routes is graded (Lipschitz-limited longitudinal
 //    profile + embankments/cuttings blended into the surroundings) so every
-//    dry route cell satisfies MAX_ROAD_SLOPE; water cells are never touched.
+//    dry route cell satisfies MAX_ROAD_SLOPE. Embankments may fill a sliver
+//    of lake/sea shore, never a river channel or a bridge cell.
+//  • Every candidate route is validated (water runs, graded slopes); failures
+//    are rolled back and re-planned around the offending cells. An invalid
+//    rail is dropped rather than shipped.
 //  • Connections: highway, rail, ship (ocean edge nearest the city) and air.
 //  • Start cell: flattest dry cell near the highway end in buildable land.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -18,7 +22,7 @@ import { CELL, MAX_ROAD_SLOPE, WATER_EPS } from '../../core/constants';
 import { DIR_DX, DIR_DY, type Cell, type OutsideConnection } from '../../core/types';
 import type { GenContext } from './context';
 import { MinHeap, blur, cellHeights, cellSlopes, clampf, distanceTransform, mix, sstep } from './grid';
-import { WK_OCEAN } from './hydro';
+import { WK_LAKE, WK_OCEAN } from './hydro';
 
 interface Grid {
   size: number;
@@ -261,6 +265,7 @@ function gradeRoute(ctx: GenContext, path: number[], maxSlope: number, locked: U
   const size = ctx.size, V = ctx.V, h = ctx.heights;
   const n = path.length;
   const Zc = cellHeights(h, size);
+  const kind = ctx.waterKind;
   const wet = new Uint8Array(ctx.nC);
   for (let i = 0; i < ctx.nC; i++) wet[i] = ctx.water[i] > Zc[i] + WATER_EPS ? 1 : 0;
   // longitudinal profile (bridges interpolate between their abutments)
@@ -319,15 +324,24 @@ function gradeRoute(ctx: GenContext, path: number[], maxSlope: number, locked: U
     }
     return false;
   };
-  /** would moving vertex v to z keep every adjacent wet cell wet? */
-  const safeWet = (v: number, z: number) => {
+  const onRoute = new Uint8Array(ctx.nC);
+  for (let k = 0; k < n; k++) onRoute[path[k]] = 1;
+  /**
+   * Would moving vertex v to z keep the adjacent water intact? Every wet cell
+   * must stay ≥ 0.3 m deep, except (when `reclaim`) lake/sea cells beside the
+   * route, which an embankment may partially fill in. River channels and the
+   * route's own bridge cells are never touched so drainage stays continuous.
+   */
+  const safeWet = (v: number, z: number, reclaim: boolean) => {
     const vx = v % V, vy = (v / V) | 0;
     const dz = z - h[v];
+    if (dz <= 0) return true;
     for (let q = 0; q < 4; q++) {
       const cx = vx - 1 + (q & 1), cy = vy - 1 + (q >> 1);
       if (cx < 0 || cy < 0 || cx >= size || cy >= size) continue;
       const i = cy * size + cx;
       if (!wet[i]) continue;
+      if (reclaim && !onRoute[i] && (kind[i] === WK_LAKE || kind[i] === WK_OCEAN)) continue;
       const zc = (h[cy * V + cx] + h[cy * V + cx + 1] + h[(cy + 1) * V + cx] + h[(cy + 1) * V + cx + 1]) * 0.25 + dz * 0.25;
       if (ctx.water[i] - zc < 0.3) return false;
     }
@@ -337,7 +351,7 @@ function gradeRoute(ctx: GenContext, path: number[], maxSlope: number, locked: U
   for (let v = 0; v < V * V; v++) {
     if (!cnt[v] || locked[v]) continue;
     const z = sum[v] / cnt[v];
-    if (touchesWet(v) && !safeWet(v, z)) continue;
+    if (touchesWet(v) && !safeWet(v, z, true)) continue;
     h[v] = z;
     routeV[v] = 1;
   }
@@ -361,7 +375,7 @@ function gradeRoute(ctx: GenContext, path: number[], maxSlope: number, locked: U
       for (const v of vs) {
         if (locked[v]) continue;
         const z = mix(h[v], mean, 0.7);
-        if (touchesWet(v) && !safeWet(v, z)) continue;
+        if (touchesWet(v) && !safeWet(v, z, true)) continue;
         h[v] = z;
         routeV[v] = 1;
       }
@@ -384,7 +398,7 @@ function gradeRoute(ctx: GenContext, path: number[], maxSlope: number, locked: U
       if (d >= R) continue;
       const w = sstep(R, 0.6, d);
       const z = mix(hr[v], target, w);
-      if (touchesWet(v) && !safeWet(v, z)) continue;
+      if (touchesWet(v) && !safeWet(v, z, false)) continue;
       h[v] = z;
     }
   }
@@ -398,6 +412,126 @@ function recapWater(ctx: GenContext, wasWet: Uint8Array): void {
     if (wasWet[i]) continue;
     if (ctx.water[i] > Zc[i] + WATER_EPS * 0.5) ctx.water[i] = Zc[i] + WATER_EPS * 0.5;
   }
+}
+
+// ── route placement with validation ────────────────────────────────────────
+
+/**
+ * Wet cells of every water run longer than `maxRun` along the path; if all
+ * runs are short but the path is wet for more than `maxWet` cells in total,
+ * the longest run. Empty when the path's water crossings are acceptable.
+ */
+function waterViolations(g: Grid, path: number[], maxRun: number, maxWet: number): number[] {
+  const bad: number[] = [];
+  let total = 0, runStart = -1, longS = -1, longL = 0;
+  for (let k = 0; k <= path.length; k++) {
+    if (k < path.length && g.wet[path[k]]) {
+      total++;
+      if (runStart < 0) runStart = k;
+      continue;
+    }
+    if (runStart < 0) continue;
+    const len = k - runStart;
+    if (len > maxRun) for (let q = runStart; q < k; q++) bad.push(path[q]);
+    if (len > longL) {
+      longL = len;
+      longS = runStart;
+    }
+    runStart = -1;
+  }
+  if (bad.length === 0 && total > maxWet) for (let q = longS; q < longS + longL; q++) bad.push(path[q]);
+  return bad;
+}
+
+/** Route cells that are dry after grading but steeper than MAX_ROAD_SLOPE. */
+function gradeViolations(ctx: GenContext, path: number[]): number[] {
+  const size = ctx.size, V = ctx.V, h = ctx.heights;
+  const bad: number[] = [];
+  for (const c of path) {
+    const x = c % size, y = (c / size) | 0;
+    const i = y * V + x;
+    const a = h[i], b = h[i + 1], d = h[i + V], e = h[i + V + 1];
+    if (ctx.water[c] > (a + b + d + e) * 0.25 + WATER_EPS) continue;
+    if ((Math.max(a, b, d, e) - Math.min(a, b, d, e)) / CELL > MAX_ROAD_SLOPE) bad.push(c);
+  }
+  return bad;
+}
+
+interface Placed {
+  path: number[];
+  edge: number;
+  routeV: Uint8Array;
+  /** remaining grade violations (0 = fully valid) */
+  bad: number;
+  /** graded terrain + water snapshot of an imperfect result (applied by the caller if accepted) */
+  snapshot: { h: Float32Array; w: Float32Array } | null;
+}
+
+interface PlaceOpts {
+  spec: Spec;
+  field: Float64Array;
+  goal: Uint8Array;
+  edges: number[];
+  pref: number[];
+  stub: number;
+  lo: number;
+  hi: number;
+  maxRun: number;
+  maxWet: number;
+  /** grading Lipschitz slope */
+  grade: number;
+  tries: number;
+  /** optional extra acceptance test (e.g. detour limit) run before grading */
+  accept?: (path: number[]) => boolean;
+}
+
+/**
+ * Find, grade and validate a route. Paths with over-long water runs are
+ * re-planned with those cells blocked; graded paths that still have steep
+ * cells are rolled back and re-planned around them. Returns the first fully
+ * valid route (terrain graded in place), else the least-bad graded one with
+ * its terrain snapshot (terrain restored; see Placed.snapshot), or null when
+ * no path exists.
+ */
+function placeRoute(ctx: GenContext, g: Grid, o: PlaceOpts, locked: Uint8Array, wasWet: Uint8Array): Placed | null {
+  const size = ctx.size, nC = ctx.nC;
+  const blocked = new Uint8Array(nC);
+  if (o.spec.blocked) blocked.set(o.spec.blocked);
+  const spec: Spec = { ...o.spec, blocked };
+  const h0 = new Float32Array(ctx.heights), w0 = new Float32Array(ctx.water);
+  let best: Placed | null = null;
+  const block3 = (c: number) => {
+    const x = c % size, y = (c / size) | 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const xx = x + dx, yy = y + dy;
+      if (xx >= 0 && yy >= 0 && xx < size && yy < size && !o.goal[yy * size + xx]) blocked[yy * size + xx] = 1;
+    }
+  };
+  for (let t = 0; t < o.tries; t++) {
+    const entry = bestEntry(g, spec, o.field, o.edges, o.stub, o.pref, o.lo, o.hi);
+    if (!entry) break;
+    const tail = astar(g, spec, entry.cells[entry.cells.length - 1], (entry.edge + 2) & 3, o.goal, o.field);
+    if (!tail) {
+      for (const c of entry.cells) blocked[c] = 1;
+      continue;
+    }
+    const path = entry.cells.concat(tail.slice(1));
+    if (o.accept && !o.accept(path)) break;
+    const wv = waterViolations(g, path, o.maxRun, o.maxWet);
+    if (wv.length) {
+      for (const c of wv) blocked[c] = 1;
+      continue;
+    }
+    const routeV = gradeRoute(ctx, path, o.grade, locked);
+    recapWater(ctx, wasWet);
+    const gv = gradeViolations(ctx, path);
+    if (gv.length === 0) return { path, edge: entry.edge, routeV, bad: 0, snapshot: null };
+    if (!best || gv.length < best.bad) best = { path, edge: entry.edge, routeV, bad: gv.length, snapshot: { h: new Float32Array(ctx.heights), w: new Float32Array(ctx.water) } };
+    ctx.heights.set(h0);
+    ctx.water.set(w0);
+    for (const c of gv) block3(c);
+  }
+  return best;
 }
 
 // ── public entry ───────────────────────────────────────────────────────────
@@ -414,31 +548,41 @@ export function routeConnections(ctx: GenContext, report: (f: number) => void): 
   report(0.08);
 
   // ── highway ──────────────────────────────────────────────────────────────
-  const hwSpec: Spec = { turn: 20, gradeK: 30, gradeMax: 0.1, hardK: 900, rough: 7, wetCost: 30, maxWaterWidth: 3.2, allowWide: false, shore: 0.6, blocked: null };
+  const hwSpec: Spec = { turn: 20, gradeK: 30, gradeMax: 0.1, hardK: 900, rough: 7, wetCost: 30, maxWaterWidth: 3.2, allowWide: false, shore: 2, blocked: null };
   const endR = Math.max(5, L.buildRadius * 0.3);
   const goal = goalDisc(g, L.startX, L.startY, endR, 0.6, null);
   const edges = L.highwayEdges.length ? L.highwayEdges : [0, 1, 2, 3];
   const pref = edges.map((_, i) => i * 0.18);
-  let hwPath: number[] | null = null;
-  let hwEdge = edges[0];
-  for (let attempt = 0; attempt < 2 && !hwPath; attempt++) {
+  const locked = new Uint8Array(V * V);
+  const occupied = new Uint8Array(nC);
+  let hw: Placed | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
     const spec = attempt === 0 ? hwSpec : { ...hwSpec, allowWide: true };
     const field = costField(g, spec, goal);
     report(0.25 + attempt * 0.1);
-    const entry = bestEntry(g, spec, field, attempt === 0 ? edges : [0, 1, 2, 3], 6, attempt === 0 ? pref : [0, 0, 0, 0]);
-    if (!entry) continue;
-    const last = entry.cells[entry.cells.length - 1];
-    const tail = astar(g, spec, last, (entry.edge + 2) & 3, goal, field);
-    if (!tail) continue;
-    hwPath = entry.cells.concat(tail.slice(1));
-    hwEdge = entry.edge;
+    const all = [0, 1, 2, 3];
+    const res = placeRoute(ctx, g, {
+      spec, field, goal,
+      edges: attempt === 0 ? edges : all,
+      pref: attempt === 0 ? pref : [0, 0, 0, 0],
+      stub: 6, lo: 0.1, hi: 0.9,
+      maxRun: attempt === 0 ? 7 : 24, maxWet: attempt === 0 ? 14 : 40,
+      grade: 0.1, tries: 6,
+    }, locked, wasWet);
+    if (res && (!hw || res.bad < hw.bad)) hw = res;
+    if (hw && hw.bad === 0) break;
   }
   report(0.45);
-  const locked = new Uint8Array(V * V);
-  const occupied = new Uint8Array(nC);
-  if (hwPath) {
-    const rv = gradeRoute(ctx, hwPath, 0.1, locked);
-    for (let v = 0; v < V * V; v++) if (rv[v]) locked[v] = 1;
+  let hwEdge = edges[0];
+  if (hw) {
+    // an imperfect highway (no valid alternative exists) keeps its best grading
+    if (hw.snapshot) {
+      ctx.heights.set(hw.snapshot.h);
+      ctx.water.set(hw.snapshot.w);
+    }
+    const hwPath = hw.path;
+    hwEdge = hw.edge;
+    for (let v = 0; v < V * V; v++) if (hw.routeV[v]) locked[v] = 1;
     for (const c of hwPath) {
       occupied[c] = 1;
       // lock every corner of highway cells so later edits never tilt them
@@ -449,16 +593,15 @@ export function routeConnections(ctx: GenContext, report: (f: number) => void): 
     const e = ctx.highway[0];
     ctx.connections.push({ kind: 'highway', x: e.x, y: e.y, dir: hwEdge });
   }
-  recapWater(ctx, wasWet);
   report(0.55);
 
   // ── rail ─────────────────────────────────────────────────────────────────
   const wantRail = !(ctx.params.theme.id === 'tropical' && size < 384);
   let railEdge = -1;
-  if (wantRail && hwPath) {
+  if (wantRail && hw) {
     g = buildGrid(ctx);
     const blocked = new Uint8Array(nC);
-    for (const c of hwPath) {
+    for (const c of hw.path) {
       const x = c % size, y = (c / size) | 0;
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
         const xx = x + dx, yy = y + dy;
@@ -467,42 +610,49 @@ export function routeConnections(ctx: GenContext, report: (f: number) => void): 
     }
     const coreR = L.buildRadius * 0.4;
     for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) if (Math.hypot(x + 0.5 - L.startX, y + 0.5 - L.startY) < coreR) blocked[y * size + x] = 1;
-    const railSpec: Spec = { turn: 32, gradeK: 90, gradeMax: 0.045, hardK: 5000, rough: 9, wetCost: 45, maxWaterWidth: 2.3, allowWide: false, shore: 1, blocked };
-    // candidate edges: opposite of the highway first, then the perpendiculars (never the open sea edge)
-    const cand = [(hwEdge + 2) & 3, (hwEdge + 1) & 3, (hwEdge + 3) & 3].filter((e) => e !== L.seaEdge);
-    for (const e of cand) {
-      // end point: toward that edge, just outside the start core, 30-50 % into the map
-      const ox = DIR_DX[e], oy = DIR_DY[e];
+    const railSpec: Spec = { turn: 32, gradeK: 90, gradeMax: 0.045, hardK: 5000, rough: 9, wetCost: 45, maxWaterWidth: 2.3, allowWide: false, shore: 4, blocked };
+    // candidate edges (never the open-sea edge): the rail should reach ~30-50 %
+    // into the map; the opposite of the highway is preferred, then the sides
+    const cands: { e: number; tx: number; ty: number; score: number }[] = [];
+    for (const [rank, e] of [(hwEdge + 2) & 3, (hwEdge + 1) & 3, (hwEdge + 3) & 3].entries()) {
+      if (e === L.seaEdge) continue;
       const off = L.buildRadius * 0.75;
-      const tx = L.startX + ox * off, ty = L.startY + oy * off;
-      const depth = e === 0 ? ty : e === 1 ? size - tx : e === 2 ? size - ty : tx;
-      if (depth < size * 0.22 || depth > size * 0.6) continue;
+      const tx = clampf(L.startX + DIR_DX[e] * off, 6, size - 7), ty = clampf(L.startY + DIR_DY[e] * off, 6, size - 7);
+      const depth = (e === 0 ? ty : e === 1 ? size - tx : e === 2 ? size - ty : tx) / size;
+      if (depth < 0.16 || depth > 0.72) continue;
+      const out = depth < 0.3 ? 0.3 - depth : depth > 0.5 ? depth - 0.5 : 0;
+      cands.push({ e, tx, ty, score: rank * 0.12 + out * 2.5 });
+    }
+    cands.sort((a, b) => a.score - b.score);
+    for (const cd of cands) {
+      const { e, tx, ty } = cd;
       const rgoal = goalDisc(g, tx, ty, Math.max(4, size * 0.02), 0.5, blocked);
       const field = costField(g, railSpec, rgoal);
-      const entry = bestEntry(g, railSpec, field, [e], 5, [0], 0.15, 0.85);
-      if (!entry) continue;
-      const tail = astar(g, railSpec, entry.cells[entry.cells.length - 1], (e + 2) & 3, rgoal, field);
-      if (!tail) continue;
-      const path = entry.cells.concat(tail.slice(1));
-      // reject absurd detours (> 2.4× the straight distance)
-      const [ex, ey] = [entry.cells[0] % size, (entry.cells[0] / size) | 0];
-      if (path.length > 2.4 * (Math.abs(ex - tx) + Math.abs(ey - ty)) + 20) continue;
-      gradeRoute(ctx, path, 0.055, locked);
-      for (const c of path) occupied[c] = 2;
-      ctx.rail = path.map((c) => ({ x: c % size, y: (c / size) | 0 }));
+      const res = placeRoute(ctx, g, {
+        spec: railSpec, field, goal: rgoal, edges: [e], pref: [0], stub: 5, lo: 0.15, hi: 0.85,
+        maxRun: 5, maxWet: 10, grade: 0.055, tries: 5,
+        // reject absurd detours (> 2.4× the straight distance)
+        accept: (path) => {
+          const ex = path[0] % size, ey = (path[0] / size) | 0;
+          return path.length <= 2.4 * (Math.abs(ex - tx) + Math.abs(ey - ty)) + 20;
+        },
+      }, locked, wasWet);
+      // the rail is optional: never ship an invalid one
+      if (!res || res.bad > 0) continue;
+      for (const c of res.path) occupied[c] = 2;
+      ctx.rail = res.path.map((c) => ({ x: c % size, y: (c / size) | 0 }));
       const r0 = ctx.rail[0];
       ctx.connections.push({ kind: 'rail', x: r0.x, y: r0.y, dir: e });
       railEdge = e;
       break;
     }
-    recapWater(ctx, wasWet);
   }
   report(0.8);
   ctx.routeMask = occupied;
 
   // ── start cell near the highway end ─────────────────────────────────────
   g = buildGrid(ctx);
-  const endCell = hwPath ? hwPath[hwPath.length - 1] : Math.floor(L.startY) * size + Math.floor(L.startX);
+  const endCell = hw ? hw.path[hw.path.length - 1] : Math.floor(L.startY) * size + Math.floor(L.startX);
   const ex = endCell % size, ey = (endCell / size) | 0;
   let best = -1, bestS = -Infinity;
   for (let y = Math.max(1, ey - 14); y <= Math.min(size - 2, ey + 14); y++) {

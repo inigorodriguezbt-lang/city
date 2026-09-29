@@ -300,6 +300,56 @@ export const POLICIES: PolicyInfo[] = [
   },
 ];
 
+/** District specialisations (District.specialization): permanent, free district-wide effects. */
+export interface SpecializationInfo {
+  id: string;
+  name: string;
+  icon: string;
+  description: string;
+  details: string[];
+  effects: PolicyEffect;
+}
+
+export const SPECIALIZATIONS: SpecializationInfo[] = [
+  {
+    id: 'tourism', name: 'Tourism', icon: '📸',
+    description: 'Souvenir shops, hotels and guided tours. Attractions here draw more visitors.',
+    details: ['+25 % tourist attraction of buildings in the district', '+15 % commercial sales', '+5 % commercial tax income', '+10 % perceived noise'],
+    effects: { tourism: 1.25, commerceSales: 1.15, income: { comLow: 1.05, comHigh: 1.05 }, noise: 1.1 },
+  },
+  {
+    id: 'leisure', name: 'Leisure & nightlife', icon: '🎭',
+    description: 'Bars, clubs and late-night restaurants. Lively and profitable, but loud.',
+    details: ['+20 % commercial sales', '+8 % commercial tax income', '+2 workplace happiness', '+25 % perceived noise', '+10 % crime'],
+    effects: { commerceSales: 1.2, income: { comLow: 1.08, comHigh: 1.08 }, happinessWork: 2, noise: 1.25, crime: 1.1, happinessRes: -1 },
+  },
+  {
+    id: 'hightech', name: 'High-tech', icon: '💾',
+    description: 'Start-ups, labs and fibre everywhere. Offices thrive on an educated workforce.',
+    details: ['Offices level up 30 % faster', '+10 % office tax income', '+10 % education gain', '+office demand'],
+    effects: { levelRate: { off: 1.3 }, income: { office: 1.1 }, education: 1.1, demand: { off: 0.06 } },
+  },
+  {
+    id: 'selfsufficient', name: 'Self-sufficient homes', icon: '🌱',
+    description: 'Solar roofs, rain tanks and compost bins in every garden.',
+    details: ['−20 % power use', '−15 % water use', '−10 % garbage', '+1 resident happiness', '−5 % residential tax income'],
+    effects: { power: 0.8, water: 0.85, sewage: 0.9, garbage: 0.9, happinessRes: 1, income: { resLow: 0.95, resHigh: 0.95 } },
+  },
+  {
+    id: 'organic', name: 'Organic & local produce', icon: '🥕',
+    description: 'Farmers markets and organic farms supplying local shops.',
+    details: ['+25 % farming income', '+5 % commercial sales', '−5 % perceived pollution', '+1 health'],
+    effects: { farmingIncome: 1.25, commerceSales: 1.05, pollution: 0.95, health: 1 },
+  },
+];
+
+const specById = new Map<string, SpecializationInfo>();
+for (const sp of SPECIALIZATIONS) specById.set(sp.id, sp);
+
+export function specializationDef(id: string | undefined | null): SpecializationInfo | undefined {
+  return id ? specById.get(id) : undefined;
+}
+
 const byId = new Map<string, PolicyInfo>();
 for (const p of POLICIES) byId.set(p.id, p);
 

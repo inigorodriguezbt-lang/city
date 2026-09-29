@@ -230,14 +230,14 @@ export function createSkyMaterial(uniforms: SkyUniforms, envMode: boolean): THRE
           vec3 g = sd * scale;
           vec3 c = floor(g);
           float h = hash13(c + float(layer) * 17.0);
-          float threshold = layer == 0 ? 0.93 : 0.955;
+          float threshold = layer == 0 ? 0.955 : 0.968;
           if (h > threshold) {
             vec3 j = hash33(c + 3.7) - 0.5;
             vec3 sp = normalize((c + 0.5 + j * 0.6) / scale);
             float ang = length(sd - sp);
             float mag = pow((h - threshold) / (1.0 - threshold), layer == 0 ? 3.0 : 6.0);
             float tw = 0.75 + 0.25 * sin(uTime * (2.0 + 5.0 * j.x) + h * 60.0);
-            float core = exp(-pow(ang / (uPixelAngle * 0.85), 2.0));
+            float core = exp(-pow(ang / (uPixelAngle * 0.7), 2.0));
             vec3 tint = mix(vec3(0.75, 0.83, 1.0), vec3(1.0, 0.86, 0.7), fract(h * 91.7));
             col += tint * core * mag * tw * (layer == 0 ? 7.0 : 2.2);
           }
@@ -284,9 +284,10 @@ export function createSkyMaterial(uniforms: SkyUniforms, envMode: boolean): THRE
         float t = (8500.0 - cameraPosition.y) / d.y;
         vec2 p = cameraPosition.xz + d.xz * t + uCloudOffset * 1.6;
         vec2 q = vec2(p.x * 0.8 + p.y * 0.6, -p.x * 0.6 + p.y * 0.8);
-        float n = texture2D(uNoise, q * vec2(1.0 / 30000.0, 1.0 / 7000.0)).g * 0.65 + texture2D(uNoise, q * vec2(1.0 / 9000.0, 1.0 / 1800.0) + 0.3).a * 0.35;
-        float a = smoothstep(0.52, 0.8, n) * uCirrus * 0.5 * exp(-t / 90000.0);
-        vec3 col = uCloudSun * 0.55 + uCloudAmbient * 1.1;
+        float n = texture2D(uNoise, q * vec2(1.0 / 30000.0, 1.0 / 8000.0)).g * 0.75 + texture2D(uNoise, q * vec2(1.0 / 11000.0, 1.0 / 3200.0) + 0.3).a * 0.25;
+        // soft, translucent wisps (never brighter than a thin veil)
+        float a = smoothstep(0.5, 0.86, n) * uCirrus * 0.42 * exp(-t / 90000.0);
+        vec3 col = uCloudSun * 0.55 + uCloudAmbient * 0.8;
         return vec4(col, a);
       }
 

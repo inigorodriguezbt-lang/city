@@ -268,33 +268,44 @@ export class SkylineBackground {
     this.clouds.sort((a, b) => a.y - b.y);
   }
 
-  /** soft cloud sprite, pre-tinted for dusk (lit from below) and night */
+  /** wispy stratus sprite (long thin streaks + a few soft puffs), pre-tinted
+   *  for dusk (lit warm from below) and night */
   private makeCloud(s: number): { dusk: HTMLCanvasElement; night: HTMLCanvasElement } {
     const { dpr } = this;
-    const cw = 420 * s;
-    const ch = 110 * s;
+    const cw = 560 * s;
+    const ch = 96 * s;
     const mask = makeCanvas(cw * dpr, ch * dpr);
     const g = mask.getContext('2d')!;
     g.scale(dpr, dpr);
-    const puffs = 7 + Math.floor(Math.random() * 6);
-    for (let i = 0; i < puffs; i++) {
-      const px = cw * (0.15 + (i / puffs) * 0.7 + rand(-0.05, 0.05));
-      const py = ch * rand(0.45, 0.7);
-      const r = ch * rand(0.18, 0.42) * (1 - Math.abs(i / puffs - 0.5) * 0.7);
-      const rg = g.createRadialGradient(px, py, 0, px, py, r * 2.2);
-      rg.addColorStop(0, 'rgba(255,255,255,0.55)');
-      rg.addColorStop(0.5, 'rgba(255,255,255,0.18)');
+    const blob = (x: number, y: number, rx: number, ry: number, a: number) => {
+      g.save();
+      g.translate(x, y);
+      g.scale(rx / ry, 1);
+      const rg = g.createRadialGradient(0, 0, 0, 0, 0, ry);
+      rg.addColorStop(0, `rgba(255,255,255,${a})`);
+      rg.addColorStop(0.45, `rgba(255,255,255,${a * 0.55})`);
       rg.addColorStop(1, 'rgba(255,255,255,0)');
       g.fillStyle = rg;
-      g.fillRect(px - r * 2.2, py - r * 2.2, r * 4.4, r * 4.4);
+      g.fillRect(-ry, -ry, ry * 2, ry * 2);
+      g.restore();
+    };
+    // a main band made of overlapping streaks, thinning towards the ends
+    const streaks = 6 + Math.floor(Math.random() * 5);
+    for (let i = 0; i < streaks; i++) {
+      const len = cw * rand(0.16, 0.42);
+      const th = ch * rand(0.05, 0.13);
+      const x = rand(len * 0.6, cw - len * 0.6);
+      const mid = 1 - Math.abs(x / cw - 0.5) * 1.4;
+      const y = ch * (0.5 + rand(-0.18, 0.2) * (0.4 + mid));
+      blob(x, y, len * 0.5, th, rand(0.35, 0.6) * (0.5 + mid * 0.5));
     }
-    // soften the flat base
-    g.globalCompositeOperation = 'destination-out';
-    const base = g.createLinearGradient(0, ch * 0.62, 0, ch);
-    base.addColorStop(0, 'rgba(0,0,0,0)');
-    base.addColorStop(1, 'rgba(0,0,0,0.9)');
-    g.fillStyle = base;
-    g.fillRect(0, 0, cw, ch);
+    // a few rounder puffs sitting on the band
+    const puffs = 2 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < puffs; i++) {
+      const x = cw * rand(0.3, 0.7);
+      const r = ch * rand(0.12, 0.2);
+      blob(x, ch * rand(0.38, 0.5), r * rand(1.6, 2.6), r, rand(0.25, 0.4));
+    }
     const tint = (top: string, bottom: string) => {
       const c = makeCanvas(mask.width, mask.height);
       const x = c.getContext('2d')!;
@@ -307,7 +318,7 @@ export class SkylineBackground {
       x.fillRect(0, 0, c.width, c.height);
       return c;
     };
-    return { dusk: tint('#9a7cc0', '#ffb89a'), night: tint('#323d6c', '#4a5688') };
+    return { dusk: tint('#8c72bc', '#ffc4a4'), night: tint('#2c3766', '#4d5a8e') };
   }
 
   private buildLayer(spec: LayerSpec, li: number, sw: number, cx: number): Layer {

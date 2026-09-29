@@ -3,7 +3,9 @@
 // buying power vs. shop capacity, goods balance, exports, the educated
 // workforce, policies and event modifiers; the displayed demand eases toward
 // it (DEMAND_SMOOTHING per day).
-import type { ZoneCategory } from '../core/types';
+import { ZoneType, type ZoneCategory } from '../core/types';
+import { zoneDef } from '../data/zones';
+import { MILESTONES } from '../data/milestones';
 import type { DayAgg } from './aggregates';
 import type { SimContext } from './context';
 import { GOODS_PER_IND_WORKER, RAW_LOCAL_SHARE, RESIDENTS_PER_COM_JOB, TAX_COMFORT, DEMAND_SMOOTHING } from './tuning';
@@ -38,12 +40,16 @@ export function demandTargets(ctx: SimContext, a: DayAgg): { t: Record<ZoneCateg
   // ── residential ───────────────────────────────────────────────────────
   // base appeal: people keep moving to a well-run city, expecting to find work
   let R = 0.36;
+  // a young town expects its jobs to follow (industry and shops are still being zoned),
+  // so a temporary lack of work weighs less until the town has found its feet
+  const young = 1 - smooth(400, 2500, pop);
   const totalJobs = a.totalJobs + a.jobsUC.com + a.jobsUC.ind + a.jobsUC.off;
   const unemployed = W * r.unemployment;
   // jobs not held by residents (vacant or filled by commuters) are an invitation to move here
   const employedResidents = W - unemployed;
   const openJobs = Math.max(0, totalJobs * 0.97 - employedResidents);
-  const jobTerm = clamp((openJobs - unemployed) / Math.max(30, W * 0.3 + 25), -1, 1) * 0.5;
+  let jobTerm = clamp((openJobs - unemployed) / Math.max(30, W * 0.3 + 25), -1, 1) * 0.5;
+  if (jobTerm < 0) jobTerm *= 1 - 0.5 * young;
   R += jobTerm;
   if (jobTerm > 0.15) why.res.push('Plenty of jobs available');
   else if (jobTerm < -0.15) why.res.push('Not enough jobs');
@@ -56,7 +62,7 @@ export function demandTargets(ctx: SimContext, a: DayAgg): { t: Record<ZoneCateg
   R += happy;
   if (happy < -0.06) why.res.push('Citizens are unhappy');
   else if (happy > 0.12) why.res.push('The city has a great reputation');
-  const jobless = Math.max(0, r.unemployment - 0.08) * 3;
+  const jobless = Math.max(0, r.unemployment - 0.08) * 3 * (1 - 0.6 * young);
   R -= jobless;
   if (jobless > 0.1) why.res.push('High unemployment scares newcomers away');
   const tr = (taxEffect(taxes.resLow) + taxEffect(taxes.resHigh)) * 0.5;
@@ -126,7 +132,7 @@ export function demandTargets(ctx: SimContext, a: DayAgg): { t: Record<ZoneCateg
 
   // ── office ────────────────────────────────────────────────────────────
   let O = 0;
-  const officeUnlocked = w.isUnlocked(4);
+  const officeUnlocked = w.isUnlocked(zoneDef(ZoneType.Office).unlock);
   if (officeUnlocked) {
     const educatedIdle = W * r.educated * r.unemployment;
     const offJobs = a.jobs.off + a.jobsUC.off;
@@ -142,9 +148,9 @@ export function demandTargets(ctx: SimContext, a: DayAgg): { t: Record<ZoneCateg
     const to = taxEffect(taxes.office);
     O -= to;
     if (to > 0.05) why.off.push('Office taxes are high');
-    O += policyDemand.off + mods.demandOff;
+    O += policyDemand.off + mods.demandOff + ctx.perks.office;
   } else {
-    why.off.push('Offices unlock at the Town milestone');
+    why.off.push(`Offices unlock at the ${MILESTONES[zoneDef(ZoneType.Office).unlock]?.name ?? 'next'} milestone`);
   }
   return {
     t: { res: clamp(R, -1, 1), com: clamp(C, -1, 1), ind: clamp(I, -1, 1), off: officeUnlocked ? clamp(O, -1, 1) : 0 },

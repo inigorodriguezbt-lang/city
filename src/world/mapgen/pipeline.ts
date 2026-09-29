@@ -10,7 +10,7 @@ import { cellSlopes, cellHeights, sstep } from './grid';
 import { buildWater, chooseSeaLevel, cutDesignedRivers, edgeOutlets, fillMinorDepressions } from './hydro';
 import { surveyResources } from './resources';
 import { clearRouteVerges, routeConnections } from './routes';
-import { clampHeights, flattenRegion, shapeTerrain } from './shapes';
+import { clampHeights, flattenRegion, shapeTerrain, smoothSeabed } from './shapes';
 import { refineStart } from './site';
 import { growForests } from './vegetation';
 
@@ -138,6 +138,7 @@ export function generateContext(settings: MapSettings, onProgress?: ProgressFn):
   const shaped = shapeTerrain(ctx);
   ctx.layout = shaped.layout;
   clampHeights(ctx);
+  smoothSeabed(ctx);
   refineStart(ctx);
   ctx.seaLevel = chooseSeaLevel(ctx);
   // closed basins too small to hold lakes are filled first, so fluvial

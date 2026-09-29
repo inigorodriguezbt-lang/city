@@ -24,6 +24,8 @@ export interface TerrainUniforms {
   uLush: { value: number };
   uSnowLine: { value: number };
   uBorder: { value: number };
+  /** seasonal colour of tree canopies seen from afar (linear) */
+  uCanopyCol: { value: THREE.Color };
 }
 
 export function createTerrainUniforms(): TerrainUniforms {
@@ -43,6 +45,7 @@ export function createTerrainUniforms(): TerrainUniforms {
     uLush: { value: 0.5 },
     uSnowLine: { value: 1e5 },
     uBorder: { value: 1 },
+    uCanopyCol: { value: new THREE.Color(0.045, 0.08, 0.035) },
   };
 }
 
@@ -54,7 +57,8 @@ uniform sampler2D uNoise;
 uniform sampler2D uDetailN;
 uniform vec3 uGrass, uGrassDry, uDirt, uSand, uRock, uSnowCol;
 uniform float uDry, uAutumn, uLush, uSnowLine, uBorder;
-uniform float uSnow, uWetness, uMapSize;
+uniform vec3 uCanopyCol;
+uniform float uSnow, uWetness, uMapSize, uNight;
 ${TERRAIN_SAMPLE_GLSL}
 
 void terrainShade(out vec3 alb, out float rough, out vec3 nW, out vec3 emis) {
@@ -77,6 +81,10 @@ void terrainShade(out vec3 alb, out float rough, out vec3 nW, out vec3 emis) {
   float shore = hs.b;
   float moist = hs.a;
   float cav = nt.b;
+  float canopyD = nt.a;
+#endif
+#ifdef TERRAIN_RING
+  float canopyD = 0.0;
 #endif
   float slope = 1.0 - nW.y;
   vec4 nA = texture2D(uNoise, p / 2900.0);
@@ -88,7 +96,9 @@ void terrainShade(out vec3 alb, out float rough, out vec3 nW, out vec3 emis) {
 
   // meadow: moisture, exposure (south-facing slopes dry out), season
   float dry = clamp(uDry + (macro - 0.5) * 1.1 + (0.5 - moist) * 0.9 + nW.z * 0.35 + (meso - 0.5) * 0.45, 0.0, 1.0);
-  vec3 grass = mix(uGrass * 0.78, uGrassDry * 0.82, smoothstep(0.12, 0.9, dry));
+  // turf reads less saturated than its swatch colour from altitude
+  vec3 gLive = mix(vec3(dot(uGrass, vec3(0.2126, 0.7152, 0.0722))), uGrass, 0.82);
+  vec3 grass = mix(gLive * 0.78, uGrassDry * 0.82, smoothstep(0.12, 0.9, dry));
   // lush, darker bluish-green hollows vs sunlit yellow-green swards
   float lushN = smoothstep(0.35, 0.75, nA.g * 0.6 + moist * 0.5 - cav * 0.2);
   grass = mix(grass, grass * vec3(0.72, 0.86, 0.78), lushN * 0.8);
@@ -97,6 +107,12 @@ void terrainShade(out vec3 alb, out float rough, out vec3 nW, out vec3 emis) {
   grass = mix(grass, grass * vec3(1.02, 1.04, 0.86), uLush * (1.0 - dry) * 0.6);
   grass = mix(grass, mix(grass, uGrassDry * vec3(1.05, 0.88, 0.62), 0.55), uAutumn * (0.45 + 0.55 * macro));
   grass *= mix(1.0, 0.8 + 0.4 * micro, detailFade);
+  // close range: tufts and small hue patches (2-25 m)
+  float nearFade = 1.0 - smoothstep(60.0, 700.0, camDist);
+  vec4 nE = texture2D(uNoise, p / 2.3 + 0.77);
+  vec4 nF = texture2D(uNoise, p / 24.0 + 0.29);
+  grass *= mix(1.0, 0.84 + 0.32 * nE.a, nearFade);
+  grass = mix(grass, grass * mix(vec3(1.1, 1.05, 0.8), vec3(0.86, 0.97, 1.02), nF.g), nearFade * 0.7);
   // clover/flower speckle in lush meadows, darker tufts
   float speck = smoothstep(0.78, 0.9, nD.g) * detailFade * uLush * (1.0 - dry);
   grass = mix(grass, vec3(0.62, 0.6, 0.35), speck * 0.25);
@@ -132,10 +148,22 @@ void terrainShade(out vec3 alb, out float rough, out vec3 nW, out vec3 emis) {
   // snow: altitude snow line + weather snow cover (patchy while melting)
   float snowAlt = smoothstep(uSnowLine - 22.0, uSnowLine + 22.0, h + (meso - 0.5) * 70.0 + (det - 0.5) * 24.0) * (1.0 - smoothstep(0.5, 0.78, slope));
   float cover = clamp(uSnow, 0.0, 1.0);
-  float patchN = meso * 0.45 + det * 0.35 + micro * 0.2;
-  float snowGround = smoothstep(1.0 - cover * 1.15, 1.08 - cover * 1.15, patchN) * (1.0 - smoothstep(0.42, 0.68, slope)) * (1.0 - under);
+  // snow lingers on shaded north-facing slopes (-Z) and in hollows, melts first on sunny ground;
+  // large meso-scale patches with ragged fine-scale edges
+  float lingering = macro * 0.3 + meso * 0.46 + det * 0.16 + micro * 0.08 - nW.z * 0.9 + (0.5 - cav) * 0.3;
+  float snowT = 1.0 - cover * 1.25;
+  float snowGround = smoothstep(snowT - 0.045, snowT + 0.045, lingering) * smoothstep(0.0, 0.06, cover) * (1.0 - smoothstep(0.42, 0.68, slope)) * (1.0 - under);
   float snow = clamp(max(snowAlt, snowGround), 0.0, 1.0);
   col = mix(col, uSnowCol * (0.9 + 0.1 * det), snow);
+
+  // forests: darker litter floor under trees; from afar (where individual
+  // trees thin out) the canopy itself tints the ground, seasonally coloured
+  float forest = smoothstep(0.04, 0.55, canopyD + (meso - 0.5) * 0.25);
+  col = mix(col, col * vec3(0.72, 0.68, 0.62), forest * (1.0 - snow * 0.7));
+  float farK = smoothstep(260.0, 1600.0, camDist);
+  vec3 canopy = uCanopyCol * (0.7 + 0.6 * nB.b) * (0.85 + 0.3 * macro);
+  canopy = mix(canopy, vec3(0.5, 0.53, 0.57), clamp(uSnow, 0.0, 1.0) * 0.35);
+  col = mix(col, canopy, forest * farK * 0.92);
 
   // cavity darkening in gullies, slight lift on ridges
   col *= 0.8 + 0.4 * cav;
@@ -161,10 +189,11 @@ void terrainShade(out vec3 alb, out float rough, out vec3 nW, out vec3 emis) {
   float sd = outside > 0.0 ? outside : -inside;
   float lw = max(2.5, camDist * 0.0018);
   float line = exp(-(sd * sd) / (lw * lw)) * uBorder;
-  emis = vec3(1.0, 0.9, 0.7) * line * 0.22;
+  emis = vec3(1.0, 0.9, 0.7) * line * 0.22 * (1.0 - 0.75 * uNight);
   float mute = smoothstep(0.0, 350.0, sd);
   col = mix(col, vec3(dot(col, vec3(0.2126, 0.7152, 0.0722))), mute * 0.28) * (1.0 - mute * 0.08);
-  alb = col;
+  // theme colours are "perceived" colours: scale to plausible albedo under full sun
+  alb = col * 0.86;
 }
 `;
 
@@ -181,6 +210,7 @@ export function createTerrainMaterial(tu: TerrainUniforms, shared: SharedUniform
       uMapSize: shared.uMapSize,
       uSeaLevel: shared.uSeaLevel,
       uFlood: shared.uFlood,
+      uNight: shared.uNight,
     });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNormal;')

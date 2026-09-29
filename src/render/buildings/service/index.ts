@@ -11,6 +11,9 @@ import { EDUCATION_MODELS } from './education';
 import { PARK_MODELS } from './parks';
 import { PLAZA_MODELS } from './plazas';
 import { TRANSIT_MODELS } from './transit';
+import { CIVIC_MODELS } from './civic';
+import { LANDMARK_MODELS } from './landmarks';
+import { MONUMENT_MODELS } from './monuments';
 
 /** Every service model generator, keyed by BuildingDef.model. */
 export const SERVICE_MODELS: Record<string, ModelFn> = {
@@ -22,6 +25,9 @@ export const SERVICE_MODELS: Record<string, ModelFn> = {
   ...PARK_MODELS,
   ...PLAZA_MODELS,
   ...TRANSIT_MODELS,
+  ...CIVIC_MODELS,
+  ...LANDMARK_MODELS,
+  ...MONUMENT_MODELS,
 };
 
 let registered = false;

@@ -63,8 +63,8 @@ export function computeRates(ctx: SimContext, a: DayAgg): DayFlows {
   // ── tourism ────────────────────────────────────────────────────────────
   const season = calendar(w.time.day).season;
   const seasonF = season === 'summer' ? 1.2 : season === 'winter' ? 0.8 : 1;
-  const tourismPolicy = ctx.policies.cityFx().tourism;
-  r.tourists = a.attraction * TOURISTS_PER_ATTRACTION * ctx.mods.tourismMult * tourismPolicy * (outside ? 1 : 0.1) * (0.6 + (r.happiness / 100) * 0.6) * seasonF;
+  // policy / specialisation tourism multipliers are already applied per attraction (services.ts)
+  r.tourists = a.attraction * TOURISTS_PER_ATTRACTION * ctx.mods.tourismMult * (outside ? 1 : 0.1) * (0.6 + (r.happiness / 100) * 0.6) * seasonF;
 
   // ── commerce & industry ────────────────────────────────────────────────
   const comJobs = a.jobs.com;
@@ -74,7 +74,7 @@ export function computeRates(ctx: SimContext, a: DayAgg): DayFlows {
   const need = a.goodsNeed;
   const supply = a.production + a.rawProduction * RAW_LOCAL_SHARE;
   const localSold = Math.min(supply, need);
-  const imports = outside ? Math.min(need - localSold, need * IMPORT_SHARE_MAX) : 0;
+  const imports = outside ? Math.min(need - localSold, need * Math.min(0.95, IMPORT_SHARE_MAX + ctx.perks.imports)) : 0;
   r.imported = need > 0 ? imports / need : 0;
   r.goods = need > 0 ? Math.min(1, (localSold + imports) / need) : comJobs > 0 ? 1 : 1;
   const surplus = supply - localSold;

@@ -50,13 +50,16 @@ export interface BSim {
   gm?: number;
 }
 
+/** 1 stored as a non-integer double (1 + 2⁻⁵²): numerically one, but never a small integer. */
+const ONE = 1 + Number.EPSILON;
+
 export function newBSim(): BSim {
-  // Fields that hold fractions start as -0 (a heap double, numerically zero) so the
-  // engine picks a double representation up front instead of migrating thousands
-  // of objects the first time a value becomes fractional.
+  // Fields that hold fractions start as -0 / ONE (heap doubles, numerically 0 / 1) so
+  // the engine picks a double representation up front instead of migrating
+  // thousands of objects the first time a value becomes fractional.
   return {
     lp: -0, np: -0, nw: -0, ns: -0, nr: -0, nwk: -0, ncu: -0, ngd: -0, dead: 0, dd: -0, cd: -0, up: -0, st: -0, zm: -0, pp: 0, sick: 0,
-    hr: -0, rc: -0, bd: 10.5, lr: 0, tx: 0, tf: 0, pm: 1.5, wm: 1.5, sm: 1.5, gm: 1.5,
+    hr: -0, rc: -0, bd: 10.5, lr: 0, tx: 0, tf: 0, pm: ONE, wm: ONE, sm: ONE, gm: ONE,
   };
 }
 
@@ -231,6 +234,8 @@ export interface SimState {
   hintedMilestone: number;
   /** last month a bankruptcy warning was shown */
   bankruptWarned: number;
+  /** cells of the regional highway / railway that existed at founding (maintained by the state, no upkeep) */
+  stateRoads: number[];
 }
 
 export function defaultSimState(seed: number): SimState {
@@ -255,6 +260,7 @@ export function defaultSimState(seed: number): SimState {
     svcUnlock: {},
     hintedMilestone: 0,
     bankruptWarned: -1,
+    stateRoads: [],
   };
 }
 
@@ -284,6 +290,7 @@ export function loadSimState(world: World): SimState {
   if (!s.advisor.cd || typeof s.advisor.cd !== 'object') s.advisor.cd = {};
   if (!s.chirp.cd || typeof s.chirp.cd !== 'object') s.chirp.cd = {};
   if (!s.svcUnlock || typeof s.svcUnlock !== 'object') s.svcUnlock = {};
+  if (!Array.isArray(s.stateRoads)) s.stateRoads = [];
   for (const key of ['births', 'deaths', 'movedIn', 'movedOut'] as const) {
     if (!Array.isArray(s.roll?.[key]) || s.roll[key].length !== 30) s.roll = d.roll;
   }

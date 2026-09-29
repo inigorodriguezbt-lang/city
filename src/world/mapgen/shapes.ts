@@ -177,7 +177,7 @@ function mediterranean(k: Kit): ThemeResult {
       const bdx = wu - ub, bdy = wv - vb;
       const bd = Math.hypot(bdx, bdy);
       const ang = Math.atan2(bdy, bdx);
-      const rB = Rb * (1 + 0.1 * k.nCoast.noise2(Math.cos(ang) * 1.6 + 11, Math.sin(ang) * 1.6 - 4));
+      const rB = Rb * (1 + 0.14 * k.nCoast.noise2(Math.cos(ang) * 1.6 + 11, Math.sin(ang) * 1.6 - 4) + 0.05 * k.nCoast.noise2(Math.cos(ang) * 4.5 - 7, Math.sin(ang) * 4.5 + 3));
       const dBay = (bd - rB) * M;
       const d = Math.min(dLine, dBay);
       const wmx = mx + wx, wmy = my + wy;
@@ -621,6 +621,25 @@ export function flattenRegion(ctx: GenContext, cx: number, cy: number, radius: n
       if (seaLevel !== null && z >= seaLevel + 0.5 && nz < seaLevel + 1.2) nz = Math.min(z, seaLevel + 1.2);
       h[i] = nz;
     }
+  }
+}
+
+/**
+ * Smooth the open seabed: the high-frequency coastline terms that make shores
+ * interesting would otherwise print as streaks across the sea floor. Deep
+ * vertices take a blurred surface; the shallow shelf keeps its detail and
+ * every submerged vertex stays submerged.
+ */
+export function smoothSeabed(ctx: GenContext): void {
+  if (!ctx.layout.hasSea) return;
+  const V = ctx.V, h = ctx.heights;
+  const low = blur(h, V, V, Math.max(6, Math.round(ctx.size / 40)));
+  for (let i = 0; i < h.length; i++) {
+    const z = h[i];
+    if (z >= -1.5) continue;
+    const t = sstep(-1.5, -9, z);
+    const nz = mix(z, low[i], t);
+    h[i] = Math.min(nz, z * 0.5);
   }
 }
 

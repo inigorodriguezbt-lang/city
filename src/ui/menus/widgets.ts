@@ -140,6 +140,8 @@ export function segmented<T extends string | number>(ctx: MenuCtx, opts: SegOpti
     const i = opts.findIndex((o) => o.value === cur);
     el.style.setProperty('--i', String(Math.max(0, i)));
     el.style.setProperty('--n', String(opts.length));
+    // a value outside the options (e.g. the "custom" graphics preset) hides the thumb
+    el.classList.toggle('none', i < 0);
   };
   const choose = (v: T, focus = false) => {
     if (v === cur) return;
@@ -281,8 +283,14 @@ export function dialog(ctx: MenuCtx, o: DialogOpts): Dialog {
     close: () => ctx.pop(d),
     onClose: o.onClose,
     focus: () => {
-      const f = card.querySelector<HTMLElement>('[autofocus], .mn-btn.primary, input, button:not(.mn-x)');
-      f?.focus({ preventScroll: true });
+      // first match by priority (not document order)
+      for (const sel of ['[autofocus]', '.mn-dlg-foot .mn-btn.primary:not(:disabled)', '.mn-dlg-body input:not([type="range"])', '.mn-dlg-foot button:not(:disabled)', 'button:not(.mn-x)']) {
+        const f = card.querySelector<HTMLElement>(sel);
+        if (f) {
+          f.focus({ preventScroll: true });
+          return;
+        }
+      }
     },
   };
   closeBtn.addEventListener('click', () => {

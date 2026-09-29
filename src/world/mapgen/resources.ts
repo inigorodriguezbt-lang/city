@@ -81,15 +81,21 @@ export function surveyResources(ctx: GenContext, report: (f: number) => void): v
   {
     const nOre = ctx.noise('ore');
     const nOre2 = ctx.noise('ore-detail');
+    // host-rock favourability: slopes, local highs and altitude, smoothed so
+    // deposits form coherent ore bodies instead of speckles on every crag
+    const host = new Float32Array(nC);
+    for (let i = 0; i < nC; i++) {
+      const z = Zc[i] - sea;
+      host[i] = clampf(0.45 * sstep(0.04, 0.3, smoothSlope[i]) + 0.35 * sstep(-5, 40, Zc[i] - regional[i]) + 0.4 * sstep(25, 160, z), 0, 1);
+    }
+    const hostS = blur(host, size, size, 5);
     const ore = new Float32Array(nC);
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
         const i = y * size + x;
         if (wet[i]) continue;
-        const z = Zc[i] - sea;
-        const hills = clampf(0.45 * sstep(0.04, 0.3, smoothSlope[i]) + 0.35 * sstep(-5, 40, Zc[i] - regional[i]) + 0.4 * sstep(25, 160, z), 0, 1);
-        const blob = nOre.fbm2(x / 38, y / 38, 4) + 0.25 * nOre2.noise2(x / 9, y / 9);
-        ore[i] = sstep(0.28, 0.58, blob) * (0.25 + 0.75 * hills);
+        const blob = nOre.fbm2(x / 46, y / 46, 4) + 0.12 * nOre2.noise2(x / 12, y / 12);
+        ore[i] = sstep(0.24, 0.5, blob + 0.22 * (hostS[i] - 0.35)) * (0.3 + 0.7 * hostS[i]);
       }
     }
     ensureDeposit(ctx, ore, wet, slope, 0.62, (i) => 0.4 * sstep(0.03, 0.25, smoothSlope[i]) + 0.6 * sstep(-5, 35, Zc[i] - regional[i]), 5, 9);
@@ -120,7 +126,7 @@ export function surveyResources(ctx: GenContext, report: (f: number) => void): v
       }
       if (best < 0) continue;
       const cx = best % size, cy = (best / size) | 0;
-      const r = rng.range(7, 13) * (size >= 512 ? 1.4 : 1);
+      const r = rng.range(12, 19) * (size >= 512 ? 1.35 : 1);
       const ang = rng.range(0, Math.PI);
       const ca = Math.cos(ang), sa = Math.sin(ang);
       const elong = rng.range(1, 1.8);

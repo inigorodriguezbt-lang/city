@@ -693,7 +693,8 @@ export class Kit extends ModelBuilder {
     return this;
   }
 
-  /** letter glyphs made from bars, on a plane facing +Z at z. Supports H, M, P, T, I, i, S, A. */
+  /** letter glyphs made from bars, on a plane facing +Z at z.
+   *  Supports A C E H I L M N O P R S T U X i 7 and space. */
   glyph(ch: string, x: number, y: number, z: number, s: number, color: ColorLike, mat: MatKey = 'emissive', t = 0.08): this {
     const b = s * 0.16; // bar thickness
     const h = s, w = s * 0.72;
@@ -725,8 +726,136 @@ export class Kit extends ModelBuilder {
       case 'A':
         bar(-w / 2 + b / 2, 0, b, h); bar(w / 2 - b / 2, 0, b, h); bar(0, h - b, w, b); bar(0, h * 0.45, w, b);
         break;
+      case 'E':
+        bar(-w / 2 + b / 2, 0, b, h); bar(0, h - b, w, b); bar(-b * 0.4, h / 2 - b / 2, w - b * 0.8, b); bar(0, 0, w, b);
+        break;
+      case 'L':
+        bar(-w / 2 + b / 2, 0, b, h); bar(0, 0, w, b);
+        break;
+      case 'O':
+        bar(-w / 2 + b / 2, 0, b, h); bar(w / 2 - b / 2, 0, b, h); bar(0, h - b, w, b); bar(0, 0, w, b);
+        break;
+      case 'C':
+        bar(-w / 2 + b / 2, 0, b, h); bar(0, h - b, w, b); bar(0, 0, w, b);
+        break;
+      case 'U':
+        bar(-w / 2 + b / 2, 0, b, h); bar(w / 2 - b / 2, 0, b, h); bar(0, 0, w, b);
+        break;
+      case 'N':
+        bar(-w / 2 + b / 2, 0, b, h); bar(w / 2 - b / 2, 0, b, h);
+        this.beam(mat, [x - w / 2 + b, y + h - b * 0.4, z], [x + w / 2 - b, y + b * 0.4, z], t, b * 1.05, color);
+        break;
+      case 'R':
+        bar(-w / 2 + b / 2, 0, b, h); bar(0, h - b, w, b); bar(0, h * 0.45, w, b); bar(w / 2 - b / 2, h * 0.45, b, h * 0.55);
+        this.beam(mat, [x, y + h * 0.47, z], [x + w / 2 - b / 2, y, z], t, b, color);
+        break;
+      case 'X':
+        this.beam(mat, [x - w / 2 + b / 2, y, z], [x + w / 2 - b / 2, y + h, z], t, b, color);
+        this.beam(mat, [x + w / 2 - b / 2, y, z], [x - w / 2 + b / 2, y + h, z], t, b, color);
+        break;
+      case '7':
+        bar(0, h - b, w, b);
+        this.beam(mat, [x + w / 2 - b / 2, y + h - b, z], [x - w * 0.15, y, z], t, b * 1.1, color);
+        break;
+      case ' ':
+        break;
       default:
         bar(0, 0, w, h);
+    }
+    return this;
+  }
+
+  /** A centred word of bar glyphs on a +Z facing plane. Returns its width. */
+  word(text: string, x: number, y: number, z: number, s: number, color: ColorLike, mat: MatKey = 'emissive', t = 0.08): number {
+    const pitch = s * 0.92;
+    const total = pitch * text.length - s * 0.2;
+    for (let i = 0; i < text.length; i++) this.glyph(text[i], x - total / 2 + s * 0.36 + i * pitch, y, z, s, color, mat, t);
+    return total;
+  }
+
+  /** Smooth parametric surface P(u, v), u, v ∈ [0, 1] on an (nu × nv) grid.
+   *  Normals follow ∂P/∂u × ∂P/∂v (swap the arguments to flip); `both` adds
+   *  back faces (thin shells). UVs are in metres (arc length along u and v). */
+  surface(mat: MatKey, nu: number, nv: number, fn: (u: number, v: number) => V3, color: ColorLike, both = false): this {
+    const P: V3[][] = [];
+    for (let i = 0; i <= nu; i++) {
+      const row: V3[] = [];
+      for (let j = 0; j <= nv; j++) row.push(fn(i / nu, j / nv));
+      P.push(row);
+    }
+    const N: V3[][] = [];
+    for (let i = 0; i <= nu; i++) {
+      const row: V3[] = [];
+      for (let j = 0; j <= nv; j++) {
+        const a = P[Math.min(nu, i + 1)][j], b = P[Math.max(0, i - 1)][j];
+        const c = P[i][Math.min(nv, j + 1)], d = P[i][Math.max(0, j - 1)];
+        _p.set(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+        _q.set(c[0] - d[0], c[1] - d[1], c[2] - d[2]);
+        _r.crossVectors(_p, _q);
+        if (_r.lengthSq() < 1e-12) _r.set(0, 1, 0);
+        _r.normalize();
+        row.push([_r.x, _r.y, _r.z]);
+      }
+      N.push(row);
+    }
+    // arc-length UVs
+    const U: number[][] = [], Vv: number[][] = [];
+    for (let i = 0; i <= nu; i++) {
+      U.push([]);
+      Vv.push([]);
+      for (let j = 0; j <= nv; j++) {
+        U[i].push(i === 0 ? 0 : U[i - 1][j] + Math.hypot(P[i][j][0] - P[i - 1][j][0], P[i][j][1] - P[i - 1][j][1], P[i][j][2] - P[i - 1][j][2]));
+        Vv[i].push(j === 0 ? 0 : Vv[i][j - 1] + Math.hypot(P[i][j][0] - P[i][j - 1][0], P[i][j][1] - P[i][j - 1][1], P[i][j][2] - P[i][j - 1][2]));
+      }
+    }
+    const pos: number[] = [], nrm: number[] = [], uvs: number[] = [];
+    const put = (i: number, j: number, flip: boolean) => {
+      pos.push(...P[i][j]);
+      const n = N[i][j];
+      nrm.push(flip ? -n[0] : n[0], flip ? -n[1] : n[1], flip ? -n[2] : n[2]);
+      uvs.push(U[i][j], Vv[i][j]);
+    };
+    for (let i = 0; i < nu; i++)
+      for (let j = 0; j < nv; j++) {
+        // front: (i,j) (i+1,j) (i+1,j+1) — CCW when normal = Pu × Pv
+        put(i, j, false); put(i + 1, j, false); put(i + 1, j + 1, false);
+        put(i, j, false); put(i + 1, j + 1, false); put(i, j + 1, false);
+        if (both) {
+          put(i, j, true); put(i + 1, j + 1, true); put(i + 1, j, true);
+          put(i, j, true); put(i, j + 1, true); put(i + 1, j + 1, true);
+        }
+      }
+    fixWinding(pos, nrm, uvs);
+    return this.emitArrays(mat, pos, nrm, uvs, color);
+  }
+
+  /** Square-section lattice column between two arbitrary points (4 chords,
+   *  panel rings and X-bracing), tapering from width w0 at a to w1 at b. */
+  trussColumn(mat: MatKey, a: V3, b: V3, w0: number, w1: number, color: ColorLike, panels = 4, chord = 0.4, web = 0.16): this {
+    const d = new THREE.Vector3(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+    if (d.lengthSq() < 1e-8) return this;
+    d.normalize();
+    const x = new THREE.Vector3().crossVectors(d, UP);
+    if (x.lengthSq() < 1e-6) x.set(1, 0, 0);
+    x.normalize();
+    const z = new THREE.Vector3().crossVectors(x, d).normalize();
+    const corner = (t: number, c: number): V3 => {
+      const w = (w0 + (w1 - w0) * t) / 2;
+      const sx = c === 0 || c === 3 ? -1 : 1, sz = c < 2 ? -1 : 1;
+      return [
+        a[0] + (b[0] - a[0]) * t + (x.x * sx + z.x * sz) * w,
+        a[1] + (b[1] - a[1]) * t + (x.y * sx + z.y * sz) * w,
+        a[2] + (b[2] - a[2]) * t + (x.z * sx + z.z * sz) * w,
+      ];
+    };
+    for (let c = 0; c < 4; c++) this.beam(mat, corner(0, c), corner(1, c), chord, chord, color);
+    for (let p = 0; p < panels; p++) {
+      const t0 = p / panels, t1 = (p + 1) / panels;
+      for (let c = 0; c < 4; c++) {
+        const c2 = (c + 1) % 4;
+        this.beam(mat, corner(t1, c), corner(t1, c2), web, web, color);
+        if (!this.lo) this.beam(mat, (p + c) % 2 ? corner(t0, c) : corner(t0, c2), (p + c) % 2 ? corner(t1, c2) : corner(t1, c), web, web, color);
+      }
     }
     return this;
   }

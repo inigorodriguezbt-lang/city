@@ -41,7 +41,7 @@ function cypressRow(k: Kit, x0: number, z0: number, x1: number, z1: number, n: n
 }
 
 /** headstone rows inside a rectangle */
-function headstones(k: Kit, cx: number, cz: number, w: number, d: number, spacingX = 2.2, spacingZ = 3): void {
+export function headstones(k: Kit, cx: number, cz: number, w: number, d: number, spacingX = 2.2, spacingZ = 3): void {
   const r = k.ctx.rng;
   const nx = Math.floor(w / spacingX), nz = Math.floor(d / spacingZ);
   const stones = [0x9a968f, 0x7d7a75, 0xb8b3aa, 0x5d5b58, 0xcfc9bd];
@@ -189,7 +189,8 @@ const M: Record<string, (k: Kit) => number> = {
         if (r.chance(0.35)) continue;
         k.box('plain', -19.5 + i * 3.8, f * 3.3 + 0.9, 1.06, 1.1, 2.2, 0.1, palette[(i + f * 3) % palette.length], { top: false });
       }
-    k.cyl('wall_glass', 12, 0, -6, 7, 7, 20, 0xc8e4f0, k.seg(20), true);
+    k.cyl('wall_plaster', 12, 0, -6, 7, 7, 20, 0xf6efe2, k.seg(20), true);
+    [0xe8665a, 0x4fb0d8, 0x7cc05a, 0xf2c230].forEach((c, i) => k.cyl('plain', 12, 4.6 + i * 4.3, -6, 7.12, 7.12, 0.55, c, k.seg(20), false));
     k.cyl('plain', 12, 20, -6, 7.3, 7.3, 1.2, 0xf2a93b, k.seg(20));
     k.box('plain', -6, 13.7, -8, 30.4, 1.2, 18.4, 0x4aa3df, { top: 'grass', topColor: lawnColor(k.ctx, 0.8) });
     crossSign(k, -18, 11.5, 1.2, 2.2);

@@ -125,7 +125,7 @@ function addTaxes(ctx: SimContext, b: Building, m: ZoneMeta, e: Effects, lv: num
     ctx.agg.taxBase[m.jobTax] += v;
     monthly += v * taxes[m.jobTax] * DAYS_PER_MONTH;
   }
-  bs.tx = Math.round(monthly * ctx.mods.incomeMult);
+  bs.tx = Math.round(monthly * ctx.mods.incomeMult * ctx.perks.tax);
 }
 
 function taxRateFor(ctx: SimContext, m: ZoneMeta): number {
@@ -209,12 +209,46 @@ export function handleGarbage(ctx: SimContext, b: Building, s: LotSample, k: num
   return (b.garbage > Math.max(1, ref * GARBAGE_PROBLEM_DAYS) ? GARBAGE_PROBLEM : 0) | (b.garbage > Math.max(3, ref * GARBAGE_SEVERE_DAYS) ? GARBAGE_SEVERE : 0);
 }
 
+// ── zoned building daily pass ─────────────────────────────────────────────
+// The pass is split into small phase functions sharing one scratch record.
+// Besides readability this keeps every function small enough for the JIT to
+// optimise quickly: rare branches (level ups, abandonment, construction
+// completion) live in their own functions, so hitting one for the first time
+// only deoptimises a few lines instead of the whole daily pass.
+
+/** Per-visit scratch values shared by the phases (one instance, reused). */
+class ZonedScratch {
+  // doubles (initialised fractional so the engine keeps an unboxed double layout)
+  svc = 0.5;
+  poll = 0.5;
+  noise = 0.5;
+  crime = 0.5;
+  untreated = 0.5;
+  jobOcc = 0.5;
+  customers = 0.5;
+  // integers
+  area = 0;
+  capR = 0;
+  capJ = 0;
+  gb = 0;
+  severe = 0;
+  envSevere = 0;
+  // flags
+  abandoned = false;
+  roadLost = false;
+  linked = false;
+  onFire = false;
+  isRes = false;
+  jobsOk = true;
+}
+
+const Z = new ZonedScratch();
+
 /**
- * Daily update of one zoned building.
- * @returns true when the building's visual state changed (renderers are notified by the caller).
+ * Daily update of one zoned building (k = days covered by this visit).
+ * Renderers are notified through `finish` when something visible changed.
  */
 export function updateZoned(ctx: SimContext, b: Building, k: number): void {
-  const w = ctx.world, agg = ctx.agg, st = ctx.state, r = st.rates;
   const bs = bsim(b);
   if (b.flags & (BFlag.Collapsed | BFlag.Burned)) {
     updateRubble(ctx, b, bs, k);
@@ -226,31 +260,22 @@ export function updateZoned(ctx: SimContext, b: Building, k: number): void {
     ctx.removeQueue.push(b.id);
     return;
   }
+  const w = ctx.world, agg = ctx.agg;
   const before = (b.flags & VISUAL_FLAGS) | (b.level << 20);
   const e = ctx.policies.at(b);
   const s = sample;
-  const resField = m.zd.resource ? w.fields[m.zd.resource] : undefined;
-  sampleLot(w, b, s, resField);
-  const area = b.w * b.h;
-  const onFire = (b.flags & BFlag.OnFire) !== 0;
+  sampleLot(w, b, s, m.zd.resource ? w.fields[m.zd.resource] : undefined);
+  Z.area = b.w * b.h;
+  Z.onFire = (b.flags & BFlag.OnFire) !== 0;
   agg.buildings++;
   agg.zoned++;
   agg.byZone[b.zone]++;
-
-  // ── utility & access flags ─────────────────────────────────────────────
-  let flags = b.flags & ~(BFlag.Powered | BFlag.Watered | BFlag.Sewered | BFlag.RoadAccess);
-  if (s.power) flags |= BFlag.Powered;
-  if (s.water) flags |= BFlag.Watered;
-  if (s.sewage) flags |= BFlag.Sewered;
-  if (s.road) flags |= BFlag.RoadAccess;
-  b.flags = flags;
-
+  applyUtilityFlags(b, s);
   // policy consumption multipliers read by consumption.ts / the utility worker
   bs.pm = e.power;
   bs.wm = e.water;
   bs.sm = e.sewage;
   bs.gm = e.garbage;
-
   // zone repainted under the building (tools normally demolish it right away)
   if (w.zone[s.ci] !== b.zone) {
     bs.zm += k;
@@ -259,420 +284,513 @@ export function updateZoned(ctx: SimContext, b: Building, k: number): void {
       return;
     }
   } else bs.zm = 0;
-
-  // ── construction ───────────────────────────────────────────────────────
-  if (b.built < 1) {
-    b.built = Math.min(1, b.built + (k * Math.max(0.05, ctx.mods.constructionMult)) / Math.max(1, bs.bd));
-    if (b.built < 1) {
-      agg.underConstruction++;
-      agg.resCapUC += capRes(m, area, b.level);
-      if (m.jobCat) agg.jobsUC[m.jobCat] += capJobs(m, area, b.level);
-      b.flags |= BFlag.UnderConstruction;
-      b.problems = s.road ? 0 : Problem.NoRoad;
-      bs.lr = LevelBlock.Construction;
-      finish(ctx, b, bs, before);
-      return;
-    }
-    b.flags &= ~BFlag.UnderConstruction;
-    b.age = 0;
-  }
+  // connected to the outside world through the road network (immigrants, trade);
+  // construction sites count too, so a brand-new town is not reported as cut off
+  Z.linked = !ctx.outside.hasConnections || ctx.outside.building(b);
+  if (Z.linked) agg.connected++;
+  if (b.built < 1 && stepConstruction(ctx, b, bs, m, s, k, before)) return;
   b.age += k;
+  if (bs.up > 0) stepScaffold(b, bs, k);
 
-  // scaffolding after a level-up
-  if (bs.up > 0) {
-    bs.up -= k;
-    if (bs.up <= 0) {
-      bs.up = 0;
-      b.flags &= ~BFlag.Upgrading;
-    }
-  }
+  Z.capR = capRes(m, Z.area, b.level);
+  Z.capJ = capJobs(m, Z.area, b.level);
+  b.maxResidents = Z.capR;
+  b.jobs = Z.capJ;
+  Z.abandoned = (b.flags & BFlag.Abandoned) !== 0;
+  Z.roadLost = !s.road && bs.nr > NO_ROAD_GRACE_DAYS;
+  Z.svc = ctx.serviceScore(s.ci);
+  Z.poll = s.poll * e.pollution;
+  Z.noise = s.noise * e.noise;
+  Z.crime = s.crime * e.crime * ctx.mods.crimeMult * ctx.perks.crime;
+  Z.isRes = Z.capR > 0;
+  Z.untreated = 0;
 
-  const capR = capRes(m, area, b.level);
-  const capJ = capJobs(m, area, b.level);
-  b.maxResidents = capR;
-  b.jobs = capJ;
-  const abandoned = (b.flags & BFlag.Abandoned) !== 0;
-  const roadLost = !s.road && bs.nr > NO_ROAD_GRACE_DAYS;
-  const svc = ctx.serviceScore(s.ci);
-  const healthOn = ctx.serviceOn('health');
-  const perPoll = s.poll * e.pollution;
-  const perNoise = s.noise * e.noise;
-  const perCrime = s.crime * e.crime * ctx.mods.crimeMult;
-  // connected to the outside world through the road network (immigrants, trade)
-  const linked = !ctx.outside.hasConnections || ctx.outside.building(b);
-  if (linked) agg.connected++;
-
-  // ── residents ──────────────────────────────────────────────────────────
-  let untreatedShare = 0;
-  if (capR > 0) {
-    let res = b.residents;
-    // sickness & treatment
-    const hf = b.health / 100;
-    const sickShare = SICK_BASE + (1 - hf) * (1 - hf) * SICK_RANGE;
-    const sick = res * sickShare;
-    const treat = healthOn ? (s.health >= 25 ? r.treat : r.treat * 0.35) : 0.65;
-    const untreated = sick * (1 - treat);
-    untreatedShare = res > 0 ? untreated / res : 0;
-    bs.sick = Math.round(sick);
-    agg.sick += sick;
-    agg.untreated += untreated;
-    if (untreated >= 1 && ctx.rng.next() < 0.08) ctx.dispatch('ambulance', b);
-    // births & deaths
-    if (res > 0) {
-      const mortality = BASE_MORTALITY * (1 + 2 * (1 - hf)) + untreatedShare * 0.25;
-      const birthRate = BASE_BIRTH_RATE * e.birthRate * (0.6 + (b.happiness / 100) * 0.8);
-      const deaths = Math.min(res, ctx.stochasticRound((res * mortality * k) / 360));
-      const births = ctx.stochasticRound((res * birthRate * k) / 360);
-      res += births - deaths;
-      agg.births += births;
-      agg.deaths += deaths;
-      if (deaths > 0 && ctx.serviceOn('deathcare')) bs.dead += deaths;
-    }
-    // immigration into vacant homes
-    if (!abandoned && !roadLost && !onFire && res < capR) {
-      const vacancy = capR - res;
-      const attract = Math.max(0.35, Math.min(1.4, 0.35 + b.happiness / 110 + (s.lv / 255) * 0.35)) * (s.power ? 1 : 0.4) * (s.water ? 1 : 0.4);
-      let n = linked ? ctx.stochasticRound(vacancy * over(Math.min(CAT_RES_MOVE_MAX, r.moveIn * attract), k)) : 0;
-      if (st.pendingImmigrants > 0 && n < vacancy) {
-        const extra = Math.min(vacancy - n, Math.ceil(st.pendingImmigrants));
-        n += extra;
-        st.pendingImmigrants = Math.max(0, st.pendingImmigrants - extra);
-      }
-      if (n > 0) {
-        b.education = (b.education * res + r.immigrantEdu * n) / (res + n);
-        res += n;
-        agg.movedIn += n;
-      }
-    }
-    if (res > capR) {
-      // grown-up children and new families that no longer fit leave town
-      agg.movedOut += res - capR;
-      res = capR;
-    }
-    // emigration
-    if (abandoned || roadLost) {
-      agg.movedOut += res;
-      res = 0;
-    } else if (res > 0) {
-      let leave = r.emigrate + Math.max(0, (28 - b.happiness) / 28) * 0.012 + (bs.hr > 40 ? 0.003 : 0) + Math.min(3, (b.distress / ABANDON_DISTRESS) * 3) * 0.002;
-      leave *= e.emigration;
-      const out = Math.min(res, ctx.stochasticRound(res * over(Math.min(0.5, leave), k)));
-      res -= out;
-      agg.movedOut += out;
-    }
-    b.residents = res;
-    const hh = Math.ceil(res / HOUSEHOLD_SIZE);
-    agg.population += res;
-    agg.households += hh;
-    agg.resCap += capR;
-    agg.resVacant += abandoned ? 0 : capR - res;
-    const wf = res * WORKFORCE_SHARE;
-    agg.workforce += wf;
-    // education of the workforce: educated share grows with the building's education level
-    agg.educatedWorkforce += wf * Math.min(1, (b.education / 100) * 1.15);
-    agg.seniors += res * SENIOR_SHARE;
-    const studentsAll = res * STUDENT_SHARE;
-    agg.studentsAll += studentsAll;
-    if (ctx.unlocked('education')) {
-      const covered = studentsAll * Math.min(1, s.edu / COVERAGE_OK);
-      agg.studentsPotential += covered;
-      agg.studentsEnrolled += covered * r.enroll;
-    }
-    if (linked) agg.outsidePop += res;
-    agg.buyingPower += res * (0.8 + 0.12 * b.level) * (0.85 + b.happiness / 400);
-    // education drifts toward what local schools can offer
-    const schoolQ = Math.min(1, s.edu / COVERAGE_FULL) * r.enroll;
-    const eduTarget = Math.max(r.immigrantEdu * 0.85, 8 + 84 * schoolQ);
-    b.education += (eduTarget - b.education) * over(0.006 * e.education, k);
-    // resident sampling for chirp authors
-    agg.resSeen++;
-    if (agg.resSeen === 1 || ctx.rng.next() * agg.resSeen < 1) agg.resSample = b.id;
-  } else {
-    b.residents = 0;
-  }
-
-  // ── jobs ───────────────────────────────────────────────────────────────
-  let jobOcc = 0;
-  let customers = 1;
-  let jobsOk = true;
-  if (m.jobCat && capJ > 0) {
-    const jc: ZoneCategory = m.jobCat;
-    const eduShare = eduShareOf(jc, b.level);
-    const fill = eduShare * r.eduFill + (1 - eduShare) * r.uneFill;
-    const target = abandoned || roadLost || onFire ? 0 : capJ * Math.min(1, fill);
-    const gap = target - b.workers;
-    let dw = gap * over(WORKER_RAMP, k);
-    if (Math.abs(dw) < 1 && Math.abs(gap) >= 1) dw = Math.sign(gap);
-    b.workers = Math.max(0, Math.min(capJ, Math.round(b.workers + dw)));
-    agg.jobs[jc] += capJ;
-    agg.workers[jc] += b.workers;
-    agg.eduJobs += capJ * eduShare;
-    agg.uneJobs += capJ * (1 - eduShare);
-    jobsOk = b.workers >= capJ * 0.7;
-    // workplace education = how educated its staff is on average
-    if (!m.mixed) b.education = Math.min(100, 100 * (eduShare * r.eduFill * 0.9 + 0.1));
-    if (jc === 'com') {
-      const local = 0.8 + (s.lv / 255) * 0.3 + (s.tourism / 255) * 0.35 + (s.transit / 255) * 0.1 - (s.traffic >= TRAFFIC_PROBLEM ? 0.15 : 0);
-      customers = r.customers * local * e.commerceSales;
-      b.visitors = Math.round(b.workers * RESIDENTS_PER_COM_JOB * Math.min(1.6, customers));
-      agg.goodsNeed += b.workers * GOODS_PER_COM_JOB;
-      b.goods += (Math.min(100, r.goods * 100) - b.goods) * over(0.3, k);
-      jobOcc = b.workers * Math.min(1.25, Math.max(0.2, customers));
-      if (customers < 0.35 && b.workers > 0) bs.ncu += k;
-      else bs.ncu = Math.max(0, bs.ncu - 2 * k);
-      if (r.goods < 0.5) bs.ngd += k;
-      else bs.ngd = Math.max(0, bs.ngd - 2 * k);
-    } else if (jc === 'ind') {
-      if (m.raw) {
-        const richness = Math.min(1.5, s.resource / 170 + 0.25);
-        const out = b.workers * RAW_PER_WORKER * (1 + 0.15 * (b.level - 1)) * richness * e.industryOutput;
-        agg.rawProduction += out;
-        const price = RAW_EXPORT_PRICE * (m.raw === 'farm' ? e.farmingIncome : 1);
-        agg.exportsValue += out * (1 - RAW_LOCAL_SHARE) * price * r.outside;
-        b.goods += (Math.min(100, r.outside ? 90 : 35) - b.goods) * over(0.25, k);
-        jobOcc = b.workers * (r.outside ? 1 : 0.5);
-        if (!r.outside && b.workers > 0) bs.ncu += k;
-        else bs.ncu = Math.max(0, bs.ncu - 2 * k);
-      } else {
-        const out = b.workers * GOODS_PER_IND_WORKER * (1 + 0.18 * (b.level - 1)) * e.industryOutput;
-        agg.production += out;
-        b.goods += (Math.min(100, r.sales * 100) - b.goods) * over(0.3, k);
-        jobOcc = b.workers * (0.4 + 0.6 * r.sales);
-        if (r.sales < 0.45 && b.workers > 0) bs.ncu += k;
-        else bs.ncu = Math.max(0, bs.ncu - 2 * k);
-      }
-      b.visitors = 0;
-    } else {
-      b.visitors = Math.round(b.workers * 0.15);
-      jobOcc = b.workers;
-    }
-  } else {
+  if (Z.isRes) stepResidents(ctx, b, bs, e, s, k);
+  else b.residents = 0;
+  Z.jobOcc = 0;
+  Z.customers = 1;
+  Z.jobsOk = true;
+  if (m.jobCat && Z.capJ > 0) stepJobs(ctx, b, bs, m, e, s, k);
+  else {
     b.workers = 0;
     if (!m.mixed) b.visitors = 0;
   }
-
-  // ── health ─────────────────────────────────────────────────────────────
-  {
-    let target = 64;
-    if (healthOn) target += Math.min(1, s.health / COVERAGE_FULL) * 26 - 8;
-    target -= (perPoll / 255) * 45 + (perNoise / 255) * 6;
-    target += (s.leisure / 255) * 8 + e.health;
-    if (!s.water) target -= 14;
-    if (!s.sewage) target -= 8;
-    target = 100 - (100 - target) * ctx.mods.healthMult;
-    target = target < 0 ? 0 : target > 100 ? 100 : target;
-    b.health += (target - b.health) * over(0.12, k);
-  }
-
-  // ── garbage & deathcare ────────────────────────────────────────────────
-  const gb = abandoned ? 0 : handleGarbage(ctx, b, s, k);
-  if (abandoned) b.garbage = 0;
-  if (bs.dead > 0) {
-    if (s.death >= DEATHCARE_PICKUP_MIN && ctx.deathPool >= 1) {
-      const take = Math.min(bs.dead, Math.floor(ctx.deathPool));
-      bs.dead -= take;
-      ctx.deathPool -= take;
-      agg.bodiesCollected += take;
-      if (take > 0 && ctx.rng.next() < 0.35) ctx.dispatch('hearse', b);
-    } else if (!ctx.serviceOn('deathcare') || abandoned) {
-      bs.dead = 0;
-    }
-  }
+  stepHealth(ctx, b, e, s, k);
+  if (Z.abandoned) {
+    b.garbage = 0;
+    Z.gb = 0;
+  } else Z.gb = handleGarbage(ctx, b, s, k);
+  if (bs.dead > 0) stepDeathcare(ctx, b, bs, s);
   if (bs.dead > 0) bs.dd += k;
   else bs.dd = 0;
   agg.deadWaiting += bs.dead;
+  stepHappiness(ctx, b, bs, m, e, s, k);
+  let p = stepProblems(ctx, b, bs, m, s, k);
+  const block = stepLevelBlock(ctx, b, bs, m, e, s, k);
+  if (bs.hr > 40) p |= Problem.HighRent;
+  stepDistress(ctx, b, bs, s, k);
+  if (b.flags & BFlag.Abandoned) p |= Problem.Abandoned;
+  b.problems = p;
+  bs.lr = block;
+  if (!(b.flags & BFlag.Abandoned)) agg.blockCount[block]++;
+  if (block === LevelBlock.None) stepLevelProgress(ctx, b, bs, m, e, k);
+  else if (bs.lp > 0) bs.lp = Math.max(0, bs.lp - k * 0.004);
+  if (!Z.abandoned) addTaxes(ctx, b, m, e, s.lv, Z.jobOcc, bs);
+  else bs.tx = 0;
+  accumulate(ctx, b, m, s, p);
+  finish(ctx, b, bs, before);
+}
 
-  // ── happiness ──────────────────────────────────────────────────────────
-  const isRes = capR > 0;
-  {
-    let h = 58;
-    h += (svc - 0.25) * 24;
-    h += (s.leisure / 255) * 8 + (s.happy / 255) * 14 + (s.lv / 255) * 8;
-    h -= (Math.max(0, perPoll - 20) / 235) * 30 + (Math.max(0, perNoise - 50) / 205) * (isRes ? 16 : 6) + (Math.max(0, perCrime - 40) / 215) * 22;
-    const t = taxRateFor(ctx, m);
-    h -= Math.max(0, t - TAX_COMFORT) * 140;
-    h += Math.max(0, TAX_COMFORT - t) * 40;
-    if (!s.power) h -= 12;
-    if (!s.water) h -= 12;
-    if (!s.sewage) h -= 8;
-    if (!s.road) h -= 10;
-    if (gb & GARBAGE_PROBLEM) h -= 8;
-    if (bs.dd > DEAD_PROBLEM_DAYS) h -= 10;
-    h -= Math.min(20, untreatedShare * 200);
-    if (isRes) h -= Math.max(0, r.unemployment - 0.05) * 60;
-    h += isRes ? e.happinessRes : e.happinessWork;
-    h += ctx.mods.happiness + b.level * 1.5;
-    h = h < 0 ? 0 : h > 100 ? 100 : h;
-    b.happiness += (h - b.happiness) * over(0.25, k);
+/** Utility connection & road access flags from the sampled lot. */
+export function applyUtilityFlags(b: Building, s: LotSample): void {
+  let flags = b.flags & ~(BFlag.Powered | BFlag.Watered | BFlag.Sewered | BFlag.RoadAccess);
+  if (s.power) flags |= BFlag.Powered;
+  if (s.water) flags |= BFlag.Watered;
+  if (s.sewage) flags |= BFlag.Sewered;
+  if (s.road) flags |= BFlag.RoadAccess;
+  b.flags = flags;
+}
+
+/** Construction progress. Returns true while the building is still a construction site. */
+function stepConstruction(ctx: SimContext, b: Building, bs: BSim, m: ZoneMeta, s: LotSample, k: number, before: number): boolean {
+  // creative mode builds instantly
+  b.built = ctx.world.creative ? 1 : Math.min(1, b.built + (k * Math.max(0.05, ctx.mods.constructionMult)) / Math.max(1, bs.bd));
+  if (b.built < 1) {
+    const agg = ctx.agg;
+    agg.underConstruction++;
+    agg.resCapUC += capRes(m, Z.area, b.level);
+    if (m.jobCat) agg.jobsUC[m.jobCat] += capJobs(m, Z.area, b.level);
+    b.flags |= BFlag.UnderConstruction;
+    b.problems = s.road ? 0 : Problem.NoRoad;
+    bs.lr = LevelBlock.Construction;
+    finish(ctx, b, bs, before);
+    return true;
   }
+  b.flags &= ~BFlag.UnderConstruction;
+  b.age = 0;
+  return false;
+}
 
-  // ── problems & distress ────────────────────────────────────────────────
+/** Scaffolding countdown after a level-up. */
+function stepScaffold(b: Building, bs: BSim, k: number): void {
+  bs.up -= k;
+  if (bs.up <= 0) {
+    bs.up = 0;
+    b.flags &= ~BFlag.Upgrading;
+  }
+}
+
+/** Sickness, births & deaths, immigration and emigration of a home. */
+function stepResidents(ctx: SimContext, b: Building, bs: BSim, e: Effects, s: LotSample, k: number): void {
+  const agg = ctx.agg, st = ctx.state, r = st.rates;
+  const capR = Z.capR;
+  let res = b.residents;
+  // sickness & treatment
+  const hf = b.health / 100;
+  const sickShare = SICK_BASE + (1 - hf) * (1 - hf) * SICK_RANGE;
+  const sick = res * sickShare;
+  const treat = ctx.serviceOn('health') ? (s.health >= 25 ? r.treat : r.treat * 0.35) : 0.65;
+  const untreated = sick * (1 - treat);
+  Z.untreated = res > 0 ? untreated / res : 0;
+  bs.sick = Math.round(sick);
+  agg.sick += sick;
+  agg.untreated += untreated;
+  if (untreated >= 1 && ctx.rng.next() < 0.08) ctx.dispatch('ambulance', b);
+  // births & deaths
+  if (res > 0) {
+    const mortality = BASE_MORTALITY * (1 + 2 * (1 - hf)) + Z.untreated * 0.25;
+    const birthRate = BASE_BIRTH_RATE * e.birthRate * (0.6 + (b.happiness / 100) * 0.8);
+    const deaths = Math.min(res, ctx.stochasticRound((res * mortality * k) / 360));
+    const births = ctx.stochasticRound((res * birthRate * k) / 360);
+    res += births - deaths;
+    agg.births += births;
+    agg.deaths += deaths;
+    if (deaths > 0 && ctx.serviceOn('deathcare')) bs.dead += deaths;
+  }
+  // immigration into vacant homes
+  if (!Z.abandoned && !Z.roadLost && !Z.onFire && res < capR) res = moveIn(ctx, b, s, res, k);
+  if (res > capR) {
+    // grown-up children and new families that no longer fit leave town
+    agg.movedOut += res - capR;
+    res = capR;
+  }
+  // emigration
+  if (Z.abandoned || Z.roadLost) {
+    agg.movedOut += res;
+    res = 0;
+  } else if (res > 0) {
+    let leave = r.emigrate + Math.max(0, (28 - b.happiness) / 28) * 0.012 + (bs.hr > 40 ? 0.003 : 0) + Math.min(3, (b.distress / ABANDON_DISTRESS) * 3) * 0.002;
+    leave *= e.emigration;
+    const out = Math.min(res, ctx.stochasticRound(res * over(Math.min(0.5, leave), k)));
+    res -= out;
+    agg.movedOut += out;
+  }
+  b.residents = res;
+  agg.population += res;
+  agg.households += Math.ceil(res / HOUSEHOLD_SIZE);
+  agg.resCap += capR;
+  agg.resVacant += Z.abandoned ? 0 : capR - res;
+  const wf = res * WORKFORCE_SHARE;
+  agg.workforce += wf;
+  // educated share of the workforce grows with the home's education level
+  agg.educatedWorkforce += wf * Math.min(1, (b.education / 100) * 1.15);
+  agg.seniors += res * SENIOR_SHARE;
+  const studentsAll = res * STUDENT_SHARE;
+  agg.studentsAll += studentsAll;
+  if (ctx.unlocked('education')) {
+    const covered = studentsAll * Math.min(1, s.edu / COVERAGE_OK);
+    agg.studentsPotential += covered;
+    agg.studentsEnrolled += covered * r.enroll;
+  }
+  if (Z.linked) agg.outsidePop += res;
+  agg.buyingPower += res * (0.8 + 0.12 * b.level) * (0.85 + b.happiness / 400);
+  // education drifts toward what local schools can offer
+  const schoolQ = Math.min(1, s.edu / COVERAGE_FULL) * r.enroll;
+  const eduTarget = Math.max(r.immigrantEdu * 0.85, 8 + 84 * schoolQ);
+  b.education += (eduTarget - b.education) * over(0.006 * e.education * ctx.perks.education, k);
+  // resident sampling for chirp authors
+  agg.resSeen++;
+  if (agg.resSeen === 1 || ctx.rng.next() * agg.resSeen < 1) agg.resSample = b.id;
+}
+
+/** Newcomers moving into a home's vacant flats. Returns the new resident count. */
+function moveIn(ctx: SimContext, b: Building, s: LotSample, res: number, k: number): number {
+  const st = ctx.state, r = st.rates;
+  const vacancy = Z.capR - res;
+  const attract = Math.max(0.35, Math.min(1.4, 0.35 + b.happiness / 110 + (s.lv / 255) * 0.35)) * (s.power ? 1 : 0.4) * (s.water ? 1 : 0.4);
+  let n = Z.linked ? ctx.stochasticRound(vacancy * over(Math.min(CAT_RES_MOVE_MAX, r.moveIn * attract), k)) : 0;
+  if (st.pendingImmigrants > 0 && n < vacancy) {
+    const extra = Math.min(vacancy - n, Math.ceil(st.pendingImmigrants));
+    n += extra;
+    st.pendingImmigrants = Math.max(0, st.pendingImmigrants - extra);
+  }
+  if (n > 0) {
+    b.education = (b.education * res + r.immigrantEdu * n) / (res + n);
+    res += n;
+    ctx.agg.movedIn += n;
+  }
+  return res;
+}
+
+/** Staffing, customers, goods and production of a workplace. */
+function stepJobs(ctx: SimContext, b: Building, bs: BSim, m: ZoneMeta, e: Effects, s: LotSample, k: number): void {
+  const agg = ctx.agg, r = ctx.state.rates;
+  const jc = m.jobCat as ZoneCategory;
+  const capJ = Z.capJ;
+  const eduShare = eduShareOf(jc, b.level);
+  const fill = eduShare * r.eduFill + (1 - eduShare) * r.uneFill;
+  const target = Z.abandoned || Z.roadLost || Z.onFire ? 0 : capJ * Math.min(1, fill);
+  const gap = target - b.workers;
+  let dw = gap * over(WORKER_RAMP, k);
+  if (Math.abs(dw) < 1 && Math.abs(gap) >= 1) dw = Math.sign(gap);
+  b.workers = Math.max(0, Math.min(capJ, Math.round(b.workers + dw)));
+  agg.jobs[jc] += capJ;
+  agg.workers[jc] += b.workers;
+  agg.eduJobs += capJ * eduShare;
+  agg.uneJobs += capJ * (1 - eduShare);
+  Z.jobsOk = b.workers >= capJ * 0.7;
+  // workplace education = how educated its staff is on average
+  if (!m.mixed) b.education = Math.min(100, 100 * (eduShare * r.eduFill * 0.9 + 0.1));
+  if (jc === 'com') stepCommerce(ctx, b, bs, e, s, k);
+  else if (jc === 'ind') {
+    if (m.raw) stepRawIndustry(ctx, b, bs, m, e, s, k);
+    else stepIndustry(ctx, b, bs, e, k);
+    b.visitors = 0;
+  } else {
+    b.visitors = Math.round(b.workers * 0.15);
+    Z.jobOcc = b.workers;
+  }
+}
+
+function stepCommerce(ctx: SimContext, b: Building, bs: BSim, e: Effects, s: LotSample, k: number): void {
+  const r = ctx.state.rates;
+  const local = 0.8 + (s.lv / 255) * 0.3 + (s.tourism / 255) * 0.35 + (s.transit / 255) * 0.1 - (s.traffic >= TRAFFIC_PROBLEM ? 0.15 : 0);
+  const customers = r.customers * local * e.commerceSales * ctx.perks.commerce;
+  Z.customers = customers;
+  b.visitors = Math.round(b.workers * RESIDENTS_PER_COM_JOB * Math.min(1.6, customers));
+  ctx.agg.goodsNeed += b.workers * GOODS_PER_COM_JOB;
+  b.goods += (Math.min(100, r.goods * 100) - b.goods) * over(0.3, k);
+  Z.jobOcc = b.workers * Math.min(1.25, Math.max(0.2, customers));
+  if (customers < 0.35 && b.workers > 0) bs.ncu += k;
+  else bs.ncu = Math.max(0, bs.ncu - 2 * k);
+  if (r.goods < 0.5) bs.ngd += k;
+  else bs.ngd = Math.max(0, bs.ngd - 2 * k);
+}
+
+function stepRawIndustry(ctx: SimContext, b: Building, bs: BSim, m: ZoneMeta, e: Effects, s: LotSample, k: number): void {
+  const agg = ctx.agg, r = ctx.state.rates;
+  const richness = Math.min(1.5, s.resource / 170 + 0.25);
+  const P = ctx.perks;
+  const perk = m.raw === 'farm' ? P.farm : m.raw === 'forest' ? P.forest : m.raw === 'mine' ? P.mine : P.oil;
+  const out = b.workers * RAW_PER_WORKER * (1 + 0.15 * (b.level - 1)) * richness * e.industryOutput * perk;
+  agg.rawProduction += out;
+  const price = RAW_EXPORT_PRICE * (m.raw === 'farm' ? e.farmingIncome : 1);
+  agg.exportsValue += out * (1 - RAW_LOCAL_SHARE) * price * r.outside;
+  b.goods += (Math.min(100, r.outside ? 90 : 35) - b.goods) * over(0.25, k);
+  Z.jobOcc = b.workers * (r.outside ? 1 : 0.5);
+  if (!r.outside && b.workers > 0) bs.ncu += k;
+  else bs.ncu = Math.max(0, bs.ncu - 2 * k);
+}
+
+function stepIndustry(ctx: SimContext, b: Building, bs: BSim, e: Effects, k: number): void {
+  const r = ctx.state.rates;
+  ctx.agg.production += b.workers * GOODS_PER_IND_WORKER * (1 + 0.18 * (b.level - 1)) * e.industryOutput * ctx.perks.industry;
+  b.goods += (Math.min(100, r.sales * 100) - b.goods) * over(0.3, k);
+  Z.jobOcc = b.workers * (0.4 + 0.6 * r.sales);
+  if (r.sales < 0.45 && b.workers > 0) bs.ncu += k;
+  else bs.ncu = Math.max(0, bs.ncu - 2 * k);
+}
+
+/** Health drifts toward a target set by healthcare, environment and utilities. */
+function stepHealth(ctx: SimContext, b: Building, e: Effects, s: LotSample, k: number): void {
+  let target = 64;
+  if (ctx.serviceOn('health')) target += Math.min(1, s.health / COVERAGE_FULL) * 26 - 8;
+  target -= (Z.poll / 255) * 45 + (Z.noise / 255) * 6;
+  target += (s.leisure / 255) * 8 + e.health + ctx.perks.health;
+  if (!s.water) target -= 14;
+  if (!s.sewage) target -= 8;
+  target = 100 - (100 - target) * ctx.mods.healthMult;
+  target = target < 0 ? 0 : target > 100 ? 100 : target;
+  b.health += (target - b.health) * over(0.12, k);
+}
+
+/** Hearses pick up the bodies waiting at a building. */
+function stepDeathcare(ctx: SimContext, b: Building, bs: BSim, s: LotSample): void {
+  if (s.death >= DEATHCARE_PICKUP_MIN && ctx.deathPool >= 1) {
+    const take = Math.min(bs.dead, Math.floor(ctx.deathPool));
+    bs.dead -= take;
+    ctx.deathPool -= take;
+    ctx.agg.bodiesCollected += take;
+    if (take > 0 && ctx.rng.next() < 0.35) ctx.dispatch('hearse', b);
+  } else if (!ctx.serviceOn('deathcare') || Z.abandoned) {
+    bs.dead = 0;
+  }
+}
+
+/** Happiness drifts toward a target from services, environment, taxes and problems. */
+function stepHappiness(ctx: SimContext, b: Building, bs: BSim, m: ZoneMeta, e: Effects, s: LotSample, k: number): void {
+  const r = ctx.state.rates;
+  const isRes = Z.isRes;
+  let h = 58;
+  h += (Z.svc - 0.25) * 24;
+  h += (s.leisure / 255) * 8 + (s.happy / 255) * 14 + (s.lv / 255) * 8;
+  h -= (Math.max(0, Z.poll - 20) / 235) * 30 + (Math.max(0, Z.noise - 50) / 205) * (isRes ? 16 : 6) + (Math.max(0, Z.crime - 40) / 215) * 22;
+  const t = taxRateFor(ctx, m);
+  h -= Math.max(0, t - TAX_COMFORT) * 140;
+  h += Math.max(0, TAX_COMFORT - t) * 40;
+  if (!s.power) h -= 12;
+  if (!s.water) h -= 12;
+  if (!s.sewage) h -= 8;
+  if (!s.road) h -= 10;
+  if (Z.gb & GARBAGE_PROBLEM) h -= 8;
+  if (bs.dd > DEAD_PROBLEM_DAYS) h -= 10;
+  h -= Math.min(20, Z.untreated * 200);
+  if (isRes) h -= Math.max(0, r.unemployment - 0.05) * 60;
+  h += isRes ? e.happinessRes + ctx.perks.happyRes : e.happinessWork + ctx.perks.happyWork;
+  h += ctx.mods.happiness + b.level * 1.5;
+  h = h < 0 ? 0 : h > 100 ? 100 : h;
+  b.happiness += (h - b.happiness) * over(0.25, k);
+}
+
+/** Problem bitmask of the day; counts severe problems into Z.severe / Z.envSevere. */
+function stepProblems(ctx: SimContext, b: Building, bs: BSim, m: ZoneMeta, s: LotSample, k: number): number {
   let p = 0;
-  let severe = 0;
-  let envSevere = 0;
-  if (!s.power) {
-    bs.np += k;
-    if (bs.np >= 2) p |= Problem.NoPower;
-    if (bs.np > UTILITY_GRACE_DAYS) { severe++; envSevere++; }
-  } else bs.np = 0;
-  if (!s.water) {
-    bs.nw += k;
-    if (bs.nw >= 2) p |= Problem.NoWater;
-    if (bs.nw > UTILITY_GRACE_DAYS) { severe++; envSevere++; }
-  } else bs.nw = 0;
-  if (!s.sewage) {
-    bs.ns += k;
-    if (bs.ns >= 2) p |= Problem.NoSewage;
-    if (bs.ns > UTILITY_GRACE_DAYS) { severe++; envSevere++; }
-  } else bs.ns = 0;
-  if (!s.road) {
-    bs.nr += k;
-    if (bs.nr >= 2) p |= Problem.NoRoad;
-    if (bs.nr > NO_ROAD_GRACE_DAYS) { severe++; envSevere++; }
-  } else bs.nr = 0;
-  if (gb & GARBAGE_PROBLEM) p |= Problem.Garbage;
-  if (gb & GARBAGE_SEVERE) severe++;
-  if (ctx.serviceOn('police') && perCrime >= CRIME_PROBLEM) {
+  Z.severe = 0;
+  Z.envSevere = 0;
+  if (!s.power || bs.np > 0) p |= utilityDays(bs, 'np', s.power, UTILITY_GRACE_DAYS, Problem.NoPower, k);
+  if (!s.water || bs.nw > 0) p |= utilityDays(bs, 'nw', s.water, UTILITY_GRACE_DAYS, Problem.NoWater, k);
+  if (!s.sewage || bs.ns > 0) p |= utilityDays(bs, 'ns', s.sewage, UTILITY_GRACE_DAYS, Problem.NoSewage, k);
+  if (!s.road || bs.nr > 0) p |= utilityDays(bs, 'nr', s.road, NO_ROAD_GRACE_DAYS, Problem.NoRoad, k);
+  if (Z.gb & GARBAGE_PROBLEM) p |= Problem.Garbage;
+  if (Z.gb & GARBAGE_SEVERE) Z.severe++;
+  if (Z.crime >= CRIME_PROBLEM && ctx.serviceOn('police')) {
     p |= Problem.Crime;
-    if (perCrime >= CRIME_SEVERE) { severe++; envSevere++; }
+    if (Z.crime >= CRIME_SEVERE) {
+      Z.severe++;
+      Z.envSevere++;
+    }
     if (ctx.rng.next() < 0.03) ctx.dispatch('police', b);
   }
-  if (isRes && healthOn && b.health < SICK_HEALTH && untreatedShare > 0.015) {
+  const isRes = Z.isRes;
+  if (isRes && b.health < SICK_HEALTH && Z.untreated > 0.015 && ctx.serviceOn('health')) {
     p |= Problem.Sick;
-    if (b.health < SICK_SEVERE) severe++;
+    if (b.health < SICK_SEVERE) Z.severe++;
   }
-  if (onFire) p |= Problem.Fire;
+  if (Z.onFire) p |= Problem.Fire;
   if (b.flags & BFlag.Flooded) p |= Problem.Flooded;
-  if (b.jobs > 0 && !abandoned) {
-    if (b.workers < b.jobs * 0.5 && b.age > 20) bs.nwk += k;
-    else bs.nwk = Math.max(0, bs.nwk - 2 * k);
-    if (bs.nwk > 5) {
-      const eduShare = eduShareOf(m.jobCat ?? 'com', b.level);
-      p |= eduShare > 0.4 && r.eduFill < r.uneFill ? Problem.NoEducated : Problem.NoWorkers;
-    }
-    if (bs.nwk > WORKER_GRACE_DAYS) severe++;
-    if (bs.ncu > 5) p |= Problem.NoCustomers;
-    if (bs.ncu > CUSTOMER_GRACE_DAYS) severe++;
-    if (m.jobCat === 'com' && bs.ngd > 5) p |= Problem.NoGoods;
-    if (m.jobCat === 'com' && bs.ngd > CUSTOMER_GRACE_DAYS) severe++;
-  } else {
+  if (b.jobs > 0 && !Z.abandoned) p |= workplaceProblems(ctx, b, bs, m, k);
+  else {
     bs.nwk = 0;
     bs.ncu = 0;
     bs.ngd = 0;
   }
-  if (m.cat !== 'ind' && perPoll >= POLLUTION_PROBLEM) {
+  if (m.cat !== 'ind' && Z.poll >= POLLUTION_PROBLEM) {
     p |= Problem.Pollution;
-    if (isRes && perPoll >= POLLUTION_SEVERE) { severe++; envSevere++; }
+    if (isRes && Z.poll >= POLLUTION_SEVERE) {
+      Z.severe++;
+      Z.envSevere++;
+    }
   }
-  if (isRes && perNoise >= NOISE_PROBLEM) p |= Problem.Noise;
+  if (isRes && Z.noise >= NOISE_PROBLEM) p |= Problem.Noise;
   if (bs.dead > 0 && bs.dd > DEAD_PROBLEM_DAYS) {
     p |= Problem.Dead;
-    if (bs.dd > DEAD_SEVERE_DAYS) severe++;
+    if (bs.dd > DEAD_SEVERE_DAYS) Z.severe++;
   }
   if (m.cat !== 'res' && m.cat !== 'ind' && s.traffic >= TRAFFIC_PROBLEM) p |= Problem.Traffic;
-  if (isRes && !abandoned && b.residents > 0 && b.happiness < UNHAPPY) {
+  if (isRes && !Z.abandoned && b.residents > 0 && b.happiness < UNHAPPY) {
     p |= Problem.LowHappiness;
-    if (b.happiness < MISERABLE) severe++;
+    if (b.happiness < MISERABLE) Z.severe++;
   }
+  return p;
+}
 
-  // high rent: land value far beyond what the building can offer
+/** Day counter of a missing utility; returns its problem bit once it shows (2+ days). */
+function utilityDays(bs: BSim, key: 'np' | 'nw' | 'ns' | 'nr', ok: boolean, grace: number, bit: number, k: number): number {
+  if (ok) {
+    bs[key] = 0;
+    return 0;
+  }
+  const days = (bs[key] += k);
+  if (days > grace) {
+    Z.severe++;
+    Z.envSevere++;
+  }
+  return days >= 2 ? bit : 0;
+}
+
+/** Staffing, customer and goods problems of a workplace. */
+function workplaceProblems(ctx: SimContext, b: Building, bs: BSim, m: ZoneMeta, k: number): number {
+  const r = ctx.state.rates;
+  let p = 0;
+  if (b.workers < b.jobs * 0.5 && b.age > 20) bs.nwk += k;
+  else bs.nwk = Math.max(0, bs.nwk - 2 * k);
+  if (bs.nwk > 5) {
+    const eduShare = eduShareOf(m.jobCat ?? 'com', b.level);
+    p |= eduShare > 0.4 && r.eduFill < r.uneFill ? Problem.NoEducated : Problem.NoWorkers;
+  }
+  if (bs.nwk > WORKER_GRACE_DAYS) Z.severe++;
+  if (bs.ncu > 5) p |= Problem.NoCustomers;
+  if (bs.ncu > CUSTOMER_GRACE_DAYS) Z.severe++;
+  if (m.jobCat === 'com') {
+    if (bs.ngd > 5) p |= Problem.NoGoods;
+    if (bs.ngd > CUSTOMER_GRACE_DAYS) Z.severe++;
+  }
+  return p;
+}
+
+/** Requirement blocking the next level; also tracks the "high rent" counter. */
+function stepLevelBlock(ctx: SimContext, b: Building, bs: BSim, m: ZoneMeta, e: Effects, s: LotSample, k: number): number {
   const maxLevel = Math.min(e.maxLevel, m.maxLevel);
-  let block: number = LevelBlock.None;
-  if (!abandoned && !onFire && !(b.flags & BFlag.Historical) && b.level < maxLevel) {
-    block = levelBlock(ctx, b, m, e, s, svc, jobsOk, customers);
+  let block: number;
+  if (!Z.abandoned && !Z.onFire && !(b.flags & BFlag.Historical) && b.level < maxLevel) {
+    block = levelBlock(ctx, b, m, e, s, Z.svc, Z.jobsOk, Z.customers);
   } else {
     block = b.level >= m.maxLevel ? LevelBlock.MaxLevel : b.level >= maxLevel ? LevelBlock.Policy : LevelBlock.Problems;
   }
+  // high rent: land value far beyond what the building can offer
   if (!e.noHighRent && (m.cat === 'res' || m.cat === 'com') && b.level < 5 && block !== LevelBlock.None && s.lv >= LEVEL_LAND_VALUE[Math.min(5, b.level + 2)]) {
     bs.hr += k;
   } else bs.hr = Math.max(0, bs.hr - 2 * k);
-  if (bs.hr > 40) p |= Problem.HighRent;
+  return block;
+}
 
-  if (!abandoned) {
-    if (severe > 0) b.distress += k * Math.min(3, severe);
-    else b.distress = Math.max(0, b.distress - k * DISTRESS_RECOVERY);
-    if (b.distress >= ABANDON_DISTRESS) {
-      b.flags |= BFlag.Abandoned;
-      agg.movedOut += b.residents;
-      b.residents = 0;
-      b.workers = 0;
-      b.visitors = 0;
-      b.garbage = 0;
-      bs.cd = 0;
-      bs.rc = 0;
-      bs.lp = 0;
-      st.metrics.abandonedEver++;
-    }
-  } else {
-    bs.cd += k;
-    const utilitiesOk = s.power && s.water && s.sewage && s.road;
-    if (envSevere === 0 && utilitiesOk && !onFire) bs.rc += k;
-    else bs.rc = 0;
-    if (bs.rc >= RECOVERY_DAYS) {
-      b.flags &= ~BFlag.Abandoned;
-      b.distress = 0;
-      bs.cd = 0;
-      bs.rc = 0;
-      bs.nwk = 0;
-      bs.ncu = 0;
-      bs.ngd = 0;
-      st.metrics.recovered++;
-    } else if (ctx.settings.gameplay.autoBulldozeAbandoned && bs.cd >= AUTO_BULLDOZE_DAYS) {
-      st.metrics.autoBulldozed++;
-      ctx.removeQueue.push(b.id);
-    }
+/** Distress builds up from severe problems; enough of it abandons the building. */
+function stepDistress(ctx: SimContext, b: Building, bs: BSim, s: LotSample, k: number): void {
+  if (!Z.abandoned) {
+    if (Z.severe > 0) b.distress += k * Math.min(3, Z.severe);
+    else if (b.distress > 0) b.distress = Math.max(0, b.distress - k * DISTRESS_RECOVERY);
+    if (b.distress >= ABANDON_DISTRESS) abandon(ctx, b, bs);
+    return;
   }
-  if (b.flags & BFlag.Abandoned) p |= Problem.Abandoned;
-  b.problems = p;
-
-  // ── level up ───────────────────────────────────────────────────────────
-  bs.lr = block;
-  if (!(b.flags & BFlag.Abandoned)) agg.blockCount[block]++;
-  if (block === LevelBlock.None) {
-    const days = LEVEL_UP_DAYS + LEVEL_UP_DAYS_PER_LEVEL * (b.level - 1);
-    bs.lp += (k * (e.levelRate[m.cat] ?? 1)) / days;
-    if (bs.lp >= 1) {
-      b.level++;
-      bs.lp = 0;
-      b.maxResidents = capRes(m, area, b.level);
-      b.jobs = capJobs(m, area, b.level);
-      b.flags |= BFlag.Upgrading;
-      bs.up = UPGRADE_SCAFFOLD_DAYS;
-      st.metrics.levelUps++;
-      if (b.level === 5 && m.highDensity) ctx.onLevel5?.(b);
-    }
-  } else if (bs.lp > 0) {
-    bs.lp = Math.max(0, bs.lp - k * 0.004);
+  bs.cd += k;
+  if (Z.envSevere === 0 && s.power && s.water && s.sewage && s.road && !Z.onFire) bs.rc += k;
+  else bs.rc = 0;
+  if (bs.rc >= RECOVERY_DAYS) recover(ctx, b, bs);
+  else if (bs.cd >= AUTO_BULLDOZE_DAYS && ctx.settings.gameplay.autoBulldozeAbandoned) {
+    ctx.state.metrics.autoBulldozed++;
+    ctx.removeQueue.push(b.id);
   }
+}
 
-  // ── taxes & aggregates ─────────────────────────────────────────────────
-  if (!abandoned) addTaxes(ctx, b, m, e, s.lv, jobOcc, bs);
-  else bs.tx = 0;
+function abandon(ctx: SimContext, b: Building, bs: BSim): void {
+  b.flags |= BFlag.Abandoned;
+  ctx.agg.movedOut += b.residents;
+  b.residents = 0;
+  b.workers = 0;
+  b.visitors = 0;
+  b.garbage = 0;
+  bs.cd = 0;
+  bs.rc = 0;
+  bs.lp = 0;
+  ctx.state.metrics.abandonedEver++;
+}
+
+function recover(ctx: SimContext, b: Building, bs: BSim): void {
+  b.flags &= ~BFlag.Abandoned;
+  b.distress = 0;
+  bs.cd = 0;
+  bs.rc = 0;
+  bs.nwk = 0;
+  bs.ncu = 0;
+  bs.ngd = 0;
+  ctx.state.metrics.recovered++;
+}
+
+/** Sustained good conditions fill the level-up bar. */
+function stepLevelProgress(ctx: SimContext, b: Building, bs: BSim, m: ZoneMeta, e: Effects, k: number): void {
+  const days = LEVEL_UP_DAYS + LEVEL_UP_DAYS_PER_LEVEL * (b.level - 1);
+  const P = ctx.perks;
+  const perk = m.cat === 'com' || m.mixed ? P.levelCom : m.cat === 'ind' ? P.levelInd : m.cat === 'off' ? P.levelOff : 1;
+  bs.lp += (k * (e.levelRate[m.cat] ?? 1) * perk) / days;
+  if (bs.lp >= 1) levelUp(ctx, b, bs, m);
+}
+
+function levelUp(ctx: SimContext, b: Building, bs: BSim, m: ZoneMeta): void {
+  b.level++;
+  bs.lp = 0;
+  b.maxResidents = capRes(m, Z.area, b.level);
+  b.jobs = capJobs(m, Z.area, b.level);
+  b.flags |= BFlag.Upgrading;
+  bs.up = UPGRADE_SCAFFOLD_DAYS;
+  ctx.state.metrics.levelUps++;
+  if (b.level === 5 && m.highDensity) ctx.onLevel5?.(b);
+}
+
+/** City-wide aggregates of a zoned building. */
+function accumulate(ctx: SimContext, b: Building, m: ZoneMeta, s: LotSample, p: number): void {
+  const agg = ctx.agg;
   const occ = b.residents + b.workers;
   if (occ > 0) {
     agg.weight += occ;
     agg.happySum += b.happiness * occ;
-    if (isRes) {
+    if (Z.isRes) {
       agg.healthSum += b.health * b.residents;
       agg.eduSum += b.education * b.residents;
       agg.eduWeight += b.residents;
     }
   }
+  const area = Z.area;
   agg.envWeight += area;
-  agg.crimeSum += perCrime * area;
+  agg.crimeSum += Z.crime * area;
   agg.landSum += s.lv * area;
   agg.pollSum += s.poll * area;
   agg.noiseSum += s.noise * area;
   if (s.lv > agg.maxLand) agg.maxLand = s.lv;
-  if (abandoned || b.flags & BFlag.Abandoned) agg.abandoned++;
+  if (b.flags & BFlag.Abandoned) agg.abandoned++;
   agg.byLevel[b.level]++;
   if (b.level === 5) agg.level5++;
   if (m.highDensity) agg.highDensity++;
   agg.styles.add(b.style);
-  if (ctx.serviceArrays.length) {
+  const arrs = ctx.serviceArrays;
+  if (arrs.length) {
     agg.coverageEvaluated++;
     let all = true;
-    for (const arr of ctx.serviceArrays) if (arr[s.ci] < COVERAGE_OK) { all = false; break; }
+    for (let i = 0; i < arrs.length; i++) {
+      if (arrs[i][s.ci] < COVERAGE_OK) {
+        all = false;
+        break;
+      }
+    }
     if (all) agg.coveredAll++;
   }
   const did = ctx.policies.districtOf(b);
@@ -683,8 +801,7 @@ export function updateZoned(ctx: SimContext, b: Building, k: number): void {
     agg.districtLand[did] += s.lv;
     agg.districtBuildings[did]++;
   }
-  agg.addProblems(p, b.id, ctx.rng.next());
-  finish(ctx, b, bs, before);
+  if (p) agg.addProblems(p, b.id, ctx.rng.next());
 }
 
 /** Notify renderers only when something visible changed (flags, level or the primary problem icon). */

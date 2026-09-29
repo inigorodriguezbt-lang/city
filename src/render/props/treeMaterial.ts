@@ -33,6 +33,8 @@ attribute float aKind;
 attribute float aSway;
 uniform float uTime, uWindSpeed, uLeaf;
 uniform vec2 uWindDir;
+/** 0 = in leaf, 1 = bare (deciduous crowns become a sparse, dithered twig mass) */
+varying float vBare;
 bool propDeciduous(float k) { return abs(k - 1.0) < 0.5 || abs(k - 3.0) < 0.5; }
 vec3 propRotate(vec3 p, float a) {
   float c = cos(a), s = sin(a);
@@ -40,9 +42,11 @@ vec3 propRotate(vec3 p, float a) {
 }
 vec3 propTransform(vec3 p) {
   float k = aKind;
+  vBare = 0.0;
   if (propDeciduous(k)) {
     float lf = clamp(uLeaf * 1.25 - (iData.y - 0.5) * 0.35 - 0.1, 0.0, 1.0);
-    p = mix(aCenter, p, lf);
+    vBare = 1.0 - lf;
+    p = mix(aCenter, p, 0.6 + 0.4 * lf);
   }
   float stretch = 0.86 + 0.28 * fract(iData.z * 7.13);
   p.y *= stretch;
@@ -57,6 +61,16 @@ vec3 propTransform(vec3 p) {
   float leafy = (k > 0.5 && k < 4.5) || abs(k - 7.0) < 0.5 ? 1.0 : 0.0;
   p += vec3(sin(uTime * 5.3 + phase * 3.0 + p.y), 0.0, cos(uTime * 4.7 + phase * 2.0 + p.x)) * 0.04 * sw * leafy * (0.3 + uWindSpeed * 0.06);
   return p + iPos.xyz;
+}
+`;
+
+/** stochastic screen-space thinning of bare crowns (also used for their shadows) */
+const BARE_DISCARD = /* glsl */ `
+if (vBare > 0.02) {
+  vec2 fc = floor(gl_FragCoord.xy);
+  vec3 p3 = fract(vec3(fc.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  if (fract((p3.x + p3.y) * p3.z) < vBare * 0.6) discard;
 }
 `;
 
@@ -87,8 +101,11 @@ export function createPropMaterial(pu: PropUniforms, shared: SharedUniforms): TH
         #ifdef USE_COLOR
         {
           float k = aKind;
-          vec3 col = vColor.rgb * (0.86 + 0.28 * iData.y);
           float j = iData.y;
+          vec3 col = vColor.rgb * (0.86 + 0.28 * j);
+          // per-tree hue: some warmer/yellower, some cooler/bluer crowns; canopies a bit deeper than turf
+          bool foliage = (k > 0.5 && k < 3.5) || abs(k - 7.0) < 0.5;
+          if (foliage) col *= mix(vec3(1.08, 1.03, 0.78), vec3(0.84, 0.95, 1.04), fract(j * 7.31)) * 0.9;
           if (abs(k - 1.0) < 0.5) {
             col = mix(col, col * vec3(1.18, 1.22, 0.7), uSpring * 0.55);
             float au = clamp(uAutumn * 1.5 - j * 0.5, 0.0, 1.0);
@@ -101,7 +118,9 @@ export function createPropMaterial(pu: PropUniforms, shared: SharedUniforms): TH
           } else if (abs(k - 6.0) < 0.5) {
             col *= uRockTint;
           }
-          float snowy = (abs(k - 2.0) < 0.5 || abs(k - 6.0) < 0.5 || abs(k - 7.0) < 0.5 || k < 0.5) ? 1.0 : 0.0;
+          // bare crowns: grey-brown twigs
+          col = mix(col, vec3(0.15, 0.115, 0.09) * (0.8 + 0.45 * fract(j * 3.7)), vBare);
+          float snowy = (abs(k - 2.0) < 0.5 || abs(k - 6.0) < 0.5 || abs(k - 7.0) < 0.5 || k < 0.5) ? 1.0 : vBare * 0.3;
           float up = smoothstep(0.15, 0.75, normal.y);
           col = mix(col, vec3(0.86, 0.9, 0.95), clamp(uSnow * 1.2, 0.0, 1.0) * up * snowy * (0.75 + 0.25 * j));
           vColor.rgb = col;
@@ -109,6 +128,9 @@ export function createPropMaterial(pu: PropUniforms, shared: SharedUniforms): TH
         #endif
         `,
       );
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vBare;')
+      .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\n' + BARE_DISCARD);
   };
   mat.customProgramCacheKey = () => 'urbis-props';
   return mat;
@@ -126,6 +148,9 @@ export function createPropDepthMaterial(pu: PropUniforms, shared: SharedUniforms
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>\n${TRANSFORM}`)
       .replace('#include <begin_vertex>', 'vec3 transformed = propTransform(position);');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vBare;')
+      .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\n' + BARE_DISCARD);
   };
   mat.customProgramCacheKey = () => 'urbis-props-depth';
   return mat;

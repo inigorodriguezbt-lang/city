@@ -87,6 +87,7 @@ export class ChunkBuilder {
   build(rect: Rect, lod: number): ChunkResult {
     const w = this.world;
     this.buf.reset();
+    this.fr.invalidate();
     this.fb.reset(lod === 0);
     this.gmCache.clear();
     this.lod = lod;
@@ -1113,7 +1114,7 @@ export class ChunkBuilder {
       map(c + 0.1, tau, this.tmp2);
       const [lx, lz] = fr.dir(this.tmp2.u - o.u, this.tmp2.v - o.v);
       const bh = fr.base(X, Z);
-      box(buf, X, Z, Math.atan2(-lz, lx), 1.3, 0.12, bh + BALLAST_TOP - 0.04, bh + SLEEPER_TOP, Kind.Sleeper);
+      box(buf, X, Z, Math.atan2(-lz, lx), 1.3, 0.12, bh + BALLAST_TOP - 0.04, bh + SLEEPER_TOP, Kind.Sleeper, false, false);
     }
     const seg = curved ? (this.lod === 0 ? 8 : 4) : fr.raised || fr.bridge ? 4 : 1;
     const prof: [number, number][] = [[0.036, 0], [0.036, 0.14], [-0.036, 0.14], [-0.036, 0]];

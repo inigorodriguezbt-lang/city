@@ -124,68 +124,158 @@ function clampU16(v: number): number {
   return v <= 0 ? 0 : v >= 1 ? 65535 : Math.round(v * 65535);
 }
 
-/** Merge detailed models. Returns the static geometry and (if any) animated parts geometry. */
-export function mergeDetail(items: MergeItem[]): { geometry: THREE.BufferGeometry | null; anim: THREE.BufferGeometry | null; verts: number } {
-  let n = 0, na = 0;
-  for (const it of items) {
-    for (const p of it.src.parts) n += p.geometry.getAttribute('position').count;
-    if (it.src.anims) for (const a of it.src.anims) na += a.part.geometry.getAttribute('position').count;
-  }
-  let geometry: THREE.BufferGeometry | null = null;
-  let anim: THREE.BufferGeometry | null = null;
-  if (n > 0) {
-    const L = alloc(n);
-    let o = 0;
+export interface DetailMerged {
+  geometry: THREE.BufferGeometry | null;
+  anim: THREE.BufferGeometry | null;
+  verts: number;
+  /** per item: [static start, static count, anim start, anim count] (vertices) */
+  ranges: Int32Array;
+}
+
+/** Incremental detail merge: `step(deadline)` copies parts until the deadline
+ *  (always at least one part), so a dense chunk is spread over several frames. */
+export class DetailMergeJob {
+  private L: Layout | null = null;
+  private LA: Layout | null = null;
+  private piv: Float32Array | null = null;
+  private axis: Float32Array | null = null;
+  private an: Float32Array | null = null;
+  private item = 0;
+  private part = 0;
+  private o = 0;
+  private oa = 0;
+  private readonly n: number;
+  private readonly na: number;
+  readonly ranges: Int32Array;
+  private animDone = false;
+  private readonly v = new THREE.Vector3();
+
+  constructor(private items: MergeItem[]) {
+    let n = 0, na = 0;
     for (const it of items) {
-      const e = it.matrix.elements;
-      for (const p of it.src.parts) o += writePart(L, o, p.geometry, matTypeId(p.mat), e, it.info);
+      for (const p of it.src.parts) n += p.geometry.getAttribute('position').count;
+      if (it.src.anims) for (const a of it.src.anims) na += a.part.geometry.getAttribute('position').count;
     }
-    geometry = toGeometry(L);
+    this.n = n;
+    this.na = na;
+    this.ranges = new Int32Array(items.length * 4);
+    if (n > 0) this.L = alloc(n);
+    if (na > 0) {
+      this.LA = alloc(na);
+      this.piv = new Float32Array(na * 3);
+      this.axis = new Float32Array(na * 3);
+      this.an = new Float32Array(na * 3);
+    }
   }
-  if (na > 0) {
-    const L = alloc(na);
-    const piv = new Float32Array(na * 3), axis = new Float32Array(na * 3), an = new Float32Array(na * 3);
-    let o = 0;
-    const v = new THREE.Vector3();
-    for (const it of items) {
-      if (!it.src.anims) continue;
-      const e = it.matrix.elements;
-      for (const a of it.src.anims) {
-        const c = writePart(L, o, a.part.geometry, matTypeId(a.part.mat), e, it.info);
-        v.set(a.pivot[0], a.pivot[1], a.pivot[2]).applyMatrix4(it.matrix);
-        const px = v.x, py = v.y, pz = v.z;
-        v.set(a.axis[0], a.axis[1], a.axis[2]).transformDirection(it.matrix);
-        const rock = a.rock ?? 0;
-        const phase = (a.phase ?? 0) + (it.info & 0xffff) * 0.0137;
-        for (let i = 0; i < c; i++) {
-          const d3 = (o + i) * 3;
-          piv[d3] = px; piv[d3 + 1] = py; piv[d3 + 2] = pz;
-          axis[d3] = v.x; axis[d3 + 1] = v.y; axis[d3 + 2] = v.z;
-          an[d3] = a.speed; an[d3 + 1] = rock; an[d3 + 2] = phase;
-        }
-        o += c;
+
+  get done(): boolean {
+    return this.item >= this.items.length && this.animDone;
+  }
+
+  /** Copy parts until `deadline` (performance.now ms). Returns true when finished. */
+  step(deadline: number): boolean {
+    let first = true;
+    const items = this.items;
+    while (this.item < items.length) {
+      const it = items[this.item];
+      const parts = it.src.parts;
+      if (this.part === 0) this.ranges[this.item * 4] = this.o;
+      while (this.part < parts.length) {
+        if (!first && performance.now() > deadline) return false;
+        first = false;
+        const p = parts[this.part++];
+        this.o += writePart(this.L!, this.o, p.geometry, matTypeId(p.mat), it.matrix.elements, it.info);
       }
+      this.ranges[this.item * 4 + 1] = this.o - this.ranges[this.item * 4];
+      this.part = 0;
+      this.item++;
     }
-    anim = toGeometry(L, {
-      aPivot: new THREE.BufferAttribute(piv, 3),
-      aAxis: new THREE.BufferAttribute(axis, 3),
-      aAnim: new THREE.BufferAttribute(an, 3),
-    });
-    // animated parts sweep beyond their rest pose: pad the bounds
-    if (anim.boundingSphere) anim.boundingSphere.radius += 30;
+    if (!this.animDone) {
+      // animated parts are few: copy them in one go
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        this.ranges[i * 4 + 2] = this.oa;
+        if (it.src.anims) for (const a of it.src.anims) this.writeAnim(it, a);
+        this.ranges[i * 4 + 3] = this.oa - this.ranges[i * 4 + 2];
+      }
+      this.animDone = true;
+    }
+    return true;
   }
-  return { geometry, anim, verts: n + na };
+
+  private writeAnim(it: MergeItem, a: ZAnim): void {
+    const v = this.v;
+    const c = writePart(this.LA!, this.oa, a.part.geometry, matTypeId(a.part.mat), it.matrix.elements, it.info);
+    v.set(a.pivot[0], a.pivot[1], a.pivot[2]).applyMatrix4(it.matrix);
+    const px = v.x, py = v.y, pz = v.z;
+    v.set(a.axis[0], a.axis[1], a.axis[2]).transformDirection(it.matrix);
+    const rock = a.rock ?? 0;
+    const phase = (a.phase ?? 0) + (it.info & 0xffff) * 0.0137;
+    const piv = this.piv!, axis = this.axis!, an = this.an!;
+    for (let i = 0; i < c; i++) {
+      const d3 = (this.oa + i) * 3;
+      piv[d3] = px; piv[d3 + 1] = py; piv[d3 + 2] = pz;
+      axis[d3] = v.x; axis[d3 + 1] = v.y; axis[d3 + 2] = v.z;
+      an[d3] = a.speed; an[d3 + 1] = rock; an[d3 + 2] = phase;
+    }
+    this.oa += c;
+  }
+
+  /** Build the geometries (call once `step` returned true). */
+  result(): DetailMerged {
+    const geometry = this.L ? toGeometry(this.L) : null;
+    let anim: THREE.BufferGeometry | null = null;
+    if (this.LA) {
+      anim = toGeometry(this.LA, {
+        aPivot: new THREE.BufferAttribute(this.piv!, 3),
+        aAxis: new THREE.BufferAttribute(this.axis!, 3),
+        aAnim: new THREE.BufferAttribute(this.an!, 3),
+      });
+      // animated parts sweep beyond their rest pose: pad the bounds
+      if (anim.boundingSphere) anim.boundingSphere.radius += 30;
+    }
+    this.items = [];
+    this.L = this.LA = null;
+    return { geometry, anim, verts: this.n + this.na, ranges: this.ranges };
+  }
+}
+
+/** Merge detailed models in one go. Returns the static geometry and (if any) animated parts geometry. */
+export function mergeDetail(items: MergeItem[]): DetailMerged {
+  const job = new DetailMergeJob(items);
+  job.step(Infinity);
+  return job.result();
+}
+
+/** Overwrite the packed aInfo of vertices [start, start+count) (in-place update of a merged chunk). */
+export function patchInfo(g: THREE.BufferGeometry, start: number, count: number, info: number): void {
+  if (count <= 0) return;
+  const a = g.getAttribute('aInfo') as THREE.BufferAttribute | undefined;
+  if (!a) return;
+  const arr = a.array as Uint8Array;
+  if (arr.length < (start + count) * 4) return;
+  const i0 = info & 255, i1 = (info >>> 8) & 255, i2 = (info >>> 16) & 255, i3 = (info >>> 24) & 255;
+  for (let v = start, e = start + count; v < e; v++) {
+    const d = v * 4;
+    arr[d] = i0; arr[d + 1] = i1; arr[d + 2] = i2; arr[d + 3] = i3;
+  }
+  a.addUpdateRange(start * 4, count * 4);
+  a.needsUpdate = true;
 }
 
 // ── far LOD boxes ──────────────────────────────────────────────────────────
 const _p = new THREE.Vector3();
 
-/** Merge LOD masses (boxes: 4 walls + top) of many buildings into one geometry. */
+/** vertices written per LOD mass (4 walls + roof, 2 triangles each) */
+export const LOD_VERTS_PER_MASS = 30;
+
+/** Merge LOD masses (boxes: 4 walls + top) of many buildings into one geometry.
+ *  Item i occupies vertices [i's offset, + masses.length * LOD_VERTS_PER_MASS) in order. */
 export function mergeLod(items: LodItem[]): THREE.BufferGeometry | null {
   let nm = 0;
   for (const it of items) nm += it.masses.length;
   if (!nm) return null;
-  const L = alloc(nm * 30);
+  const L = alloc(nm * LOD_VERTS_PER_MASS);
   let o = 0;
   const corners: [number, number][] = [[0, 0], [0, 0], [0, 0], [0, 0]];
   for (const it of items) {

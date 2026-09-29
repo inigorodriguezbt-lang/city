@@ -3,8 +3,8 @@ import * as THREE from 'three';
 import { Kit, type P2, type V3 } from './kit';
 import { C, shade, mix, lawnColor, civicLook, dryGround } from './colors';
 import { models } from './define';
-import { bench, bus, bush, car, chimney, container, containerStack, conveyor, crowd, fence, flagpole, flowerBed, hedge, logPile, parkedCars, parkingLot, person, pile, pipeRack as _unused, sphereTank, tank, tractor, tree, treeGrove, themeTree, truck, umbrella, van } from './props';
-import { antennaMast, archWindow, civicBlock, clockFace, hall, lampsAlong, officeBlock, pipeRack, portico, rollDoors, statueFigure } from './arch';
+import { bench, bus, car, chimney, container, containerStack, conveyor, crowd, fence, flagpole, flowerBed, hedge, logPile, parkedCars, pile, sphereTank, tank, tractor, tree, themeTree, truck, umbrella, van } from './props';
+import { antennaMast, archWindow, civicBlock, clockFace, hall, lampsAlong, pipeRack, portico, rollDoors, statueFigure } from './arch';
 
 // ── shared bits ────────────────────────────────────────────────────────────
 /** row of flagpoles with varied flags */
@@ -251,8 +251,7 @@ const M: Record<string, (k: Kit) => number> = {
     'HOTEL'.split('').forEach((ch, i) => {
       const y = 22 - i * 3.6;
       k.box('emissive', 12.6, 6 + y, 4.05, 0.8, 3, 0.1, 0xff4f7a);
-      if (!k.lo) k.box('emissive', 12.6, 6.3 + y, 4.1, 0.5, 2.4, 0.05, 0xfff0f4);
-      void ch;
+      if (!k.lo) k.glyph(ch, 12.6, 6.3 + y, 4.14, 2.3, 0xfff0f4, 'emissive', 0.05);
     });
     k.light(12.6, 18, 5, 0xff4f7a, 10, 'neon');
     // entrance canopy with drop-off
@@ -332,39 +331,106 @@ const M: Record<string, (k: Kit) => number> = {
 
   theme_hotel(k) {
     const W = k.W, D = k.D;
-    k.lot('paving', 0xd8ccb0, 0.2, 0.05);
-    // glass pyramid casino-hotel with a sky beam and a sphinx guarding the drive
-    const py = -8, ps = 40, ph = 36;
-    k.pyramid('glass', 0, 0, py, ps, ps, ph, 0x2a3440);
-    if (!k.lo) for (let i = 1; i < 10; i++) {
-      const y = (ph * i) / 10, s = ps * (1 - i / 10);
-      for (const sgn of [-1, 1]) {
-        k.beam('emissive', [-s / 2, y, py + (sgn * s) / 2], [s / 2, y, py + (sgn * s) / 2], 0.12, 0.12, 0xffd08a);
-        k.beam('emissive', [(sgn * s) / 2, y, py - s / 2], [(sgn * s) / 2, y, py + s / 2], 0.12, 0.12, 0xffd08a);
+    // A 1930s ocean liner, bow to the street, "afloat" in a reflecting basin
+    k.lot('paving', 0xd8d2c4, 0.2, 0.05);
+    const L = 68, B = 15, zs = -39, keel = -3, deck0 = 9;
+    k.box('concrete', 0, -0.6, zs + L / 2 - 1, 24, 1, L + 6, 0xc8c2b4, { top: false });
+    k.flat('water', 0, zs + L / 2 - 1, 23, L + 5, 0.3, 0x3f8fa8);
+    const halfB = (u: number) => {
+      if (u < 0.12) return (B / 2) * (0.62 + 0.38 * Math.sin((u / 0.12) * (Math.PI / 2)));
+      if (u > 0.62) return (B / 2) * Math.pow(Math.cos(((u - 0.62) / 0.38) * (Math.PI / 2)), 0.75);
+      return B / 2;
+    };
+    const deckY = (u: number) => deck0 + 2.2 * Math.pow(Math.max(0, u - 0.72) / 0.28, 1.6);
+    const P = (u: number, v: number, sx: number): [number, number, number] => {
+      const b = halfB(u), dy = deckY(u);
+      const x = sx * b * Math.pow(Math.sin((v * Math.PI) / 2), 0.35);
+      const y = keel + (dy - keel) * (1 - Math.cos((v * Math.PI) / 2));
+      const rake = u > 0.9 ? ((u - 0.9) / 0.1) * 3.5 * v : 0;
+      return [x, y, zs + u * L + rake];
+    };
+    const nu = k.seg(24), nv = k.seg(8);
+    const vW = 0.52; // waterline split for the red boot-topping
+    for (const sx of [-1, 1]) {
+      const band = (v0: number, v1: number, col: number) => {
+        if (sx > 0) k.surface('plain', Math.max(2, Math.round(nv * (v1 - v0))), nu, (a, b) => P(b, v0 + (v1 - v0) * a, sx), col);
+        else k.surface('plain', nu, Math.max(2, Math.round(nv * (v1 - v0))), (a, b) => P(a, v0 + (v1 - v0) * b, sx), col);
+      };
+      band(0, vW, 0xa8281f);
+      band(vW, 1, 0x1c1d20);
+      // white sheer line + portholes
+      const pts: [number, number, number][] = [];
+      for (let i = 0; i <= 20; i++) { const q = P(i / 20, 1, sx); pts.push([q[0] + sx * 0.05, q[1] - 0.3, q[2]]); }
+      k.polyPipe('plain', pts, 0.16, 0xf4f4f0, 4);
+      if (!k.lo) for (const y of [4.2, 6.4]) for (let z = zs + 8; z < zs + L * 0.66; z += 2.3) k.box('emissive', sx * (B / 2 + 0.03), y, z, 0.06, 0.55, 0.55, 0xe8dca8, { top: false });
+    }
+    // stern closure + main deck
+    const stern: [number, number][] = [];
+    for (let i = 0; i <= nv; i++) stern.push([P(0, i / nv, 1)[0], P(0, i / nv, 1)[1]]);
+    for (let i = 0; i < nv; i++) {
+      k.tri('plain', { x: 0, y: keel, z: zs }, { x: stern[i][0], y: stern[i][1], z: zs }, { x: stern[i + 1][0], y: stern[i + 1][1], z: zs }, [0, 0], [1, 0], [1, 1], 0x1c1d20, { x: 0, y: 0, z: -1 });
+      k.tri('plain', { x: 0, y: keel, z: zs }, { x: -stern[i][0], y: stern[i][1], z: zs }, { x: -stern[i + 1][0], y: stern[i + 1][1], z: zs }, [0, 0], [1, 0], [1, 1], 0x1c1d20, { x: 0, y: 0, z: -1 });
+    }
+    k.surface('wood', nu, 2, (u, v) => { const b = halfB(u); return [(v * 2 - 1) * b, deckY(u), zs + u * L + (u > 0.9 ? ((u - 0.9) / 0.1) * 3.5 : 0)]; }, 0xcdb68e);
+    // stepped art-deco superstructure with rounded fronts
+    const white = 0xf4f2ec;
+    const tiers: [number, number, number, number][] = [[12.6, -30, 12, 3.3], [11.2, -26, 6, 3.3], [9.6, -20, 0, 3.3], [7.4, -12, -4, 2.6]];
+    let y = deck0;
+    tiers.forEach(([w, za, zb, h], i) => {
+      const z0 = zs + L / 2 + za, z1 = zs + L / 2 + zb;
+      k.box('wall_plaster', 0, y, (z0 + z1) / 2, w, h, z1 - z0, white, { top: 'wood', topColor: 0xcdb68e });
+      k.rev('wall_plaster', 0, y, z1, [[w / 2, 0], [w / 2, h]], white, k.seg(12), { a0: 0, a1: Math.PI, top: true });
+      k.box('metal', 0, y + h, (z0 + z1) / 2, w + 0.2, 0.9, z1 - z0, 0xf8f8f8, { top: false, sides: { n: false, s: false } });
+      if (i === 3) {
+        k.rev('glass', 0, y + 0.8, z1, [[w / 2 + 0.03, 0], [w / 2 + 0.03, 1.2]], 0x2a3440, k.seg(12), { a0: 0.15, a1: Math.PI - 0.15 });
+        k.word('HOTEL', 0, y + h + 0.3, z1 - 1.2, 1.2, 0xffd878, 'neon', 0.1);
       }
-    }
-    k.cyl('neon', 0, ph - 1, py, 0.6, 0.6, 2, 0xfff4e0, 8);
-    k.light(0, ph + 1, py, 0xfff4e0, 16, 'flood');
-    k.light(0, ph + 30, py, 0xfff4e0, 10, 'neon');
-    // obelisks, sphinx, porte-cochère, neon marquee
-    for (const s of [-1, 1]) {
-      k.rev('concrete', s * 14, 0, 22, [[1 * Math.SQRT2, 0], [0.6 * Math.SQRT2, 14], [0, 16]], 0xd8c89a, 4, { crease: 10, a0: Math.PI / 4, a1: Math.PI / 4 + Math.PI * 2 });
-    }
-    k.at(0, 0, 24, 0, () => {
-      k.box('concrete', 0, 0, 0, 5, 2.4, 12, 0xd8c89a);
-      k.box('concrete', 0, 2.4, 3.6, 4, 3.2, 4, 0xd8c89a);
-      k.box('concrete', 0, 5.6, 4.4, 3, 2.8, 3, 0xcdbb8a);
-      k.pyramid('concrete', 0, 8.4, 4.4, 3.4, 3.4, 1.4, 0x3a5a8a);
-      for (const s of [-1, 1]) k.box('concrete', s * 1.6, 0, 7.4, 1.4, 1.2, 4, 0xd8c89a);
+      y += h;
     });
-    k.box('metal', 0, 6, 13, 26, 0.6, 8, 0xc8a040, { bottom: true });
-    for (const s of [-1, 1]) k.box('concrete', s * 12, 0, 13, 1.2, 6, 1.2, 0xd8c89a);
-    k.sign(0, 7.4, 17.1, 18, 1.8, 0xff3fd0, 0xff8ae8, 0x1a1a1a);
-    for (let i = 0; i < 14; i++) k.light(-13 + i * 2, 6.2, 17.2, [0xffd05a, 0xff5ab0][i % 2], 1.4, 'neon');
+    // lifeboats on davits along the boat deck
+    for (const sx of [-1, 1])
+      for (let i = 0; i < 6; i++) {
+        const z = zs + L / 2 - 28 + i * 5.2, x = sx * 6.6;
+        k.box('plain', x, deck0 + 4.3, z, 1.5, 0.9, 4.2, 0xf4f4f0);
+        k.box('plain', x, deck0 + 5.2, z, 1.3, 0.25, 3.9, 0xe07a2a);
+        for (const dz of [-1.6, 1.6]) k.beam('metal', [sx * 5.8, deck0 + 3.3, z + dz], [x, deck0 + 6, z + dz], 0.14, 0.14, 0xf4f4f0);
+      }
+    // three raked funnels
+    const fy = deck0 + 3.3 * 3;
+    [-22, -13, -4].forEach((dz, i) => {
+      const z = zs + L / 2 + dz;
+      k.push(new THREE.Matrix4().makeTranslation(0, fy, z).multiply(new THREE.Matrix4().makeRotationX(-0.09)));
+      k.rev('plain', 0, 0, 0, [[2.1, 0], [2.1, 8.8]], 0xc8322b, k.seg(16), { sz: 1.45 });
+      k.rev('plain', 0, 8.8, 0, [[2.12, 0], [2.12, 2.2]], 0x1a1a1c, k.seg(16), { sz: 1.45, top: true });
+      k.pop();
+      if (i === 0) k.emitter('steam', 0, fy + 11.5, z - 1, 0.25);
+    });
+    // masts with dressing lines of string lights
+    const foreZ = zs + L * 0.8, aftZ = zs + 5;
+    k.cyl('metal', 0, deckY(0.8), foreZ, 0.25, 0.12, 24, 0xe8e2d0, 6);
+    k.cyl('metal', 0, deck0, aftZ, 0.25, 0.12, 22, 0xe8e2d0, 6);
+    const bowP: V3 = [0, deckY(1) + 0.5, zs + L + 3.4], sternP: V3 = [0, deck0 + 1, zs + 0.5];
+    const foreTop: V3 = [0, deckY(0.8) + 24, foreZ], aftTop: V3 = [0, deck0 + 22, aftZ];
+    for (const [a, b] of [[bowP, foreTop], [foreTop, aftTop], [aftTop, sternP]] as [V3, V3][]) {
+      k.cable('metal', a, b, 1.2, 0.04, 0x333333, 8);
+      for (let t = 0.1; t < 1; t += 0.13) k.light(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t - 1.2 * 4 * t * (1 - t), a[2] + (b[2] - a[2]) * t, [0xffe0a0, 0xff9ab8, 0x9fd8ff][Math.round(t * 10) % 3], 1.6, 'lamp');
+    }
+    k.light(0, deckY(0.8) + 24.3, foreZ, C.beaconRed, 2.5, 'beacon', true);
+    // gangway entrance pavilion with a neon marquee
+    const gz = 14, gx = 16;
+    k.box('wall_glass', gx, 0, gz, 10, 5, 8, 0x9ac4d8, { top: 'roof_flat' });
+    k.box('metal', gx, 5, gz + 1, 11, 0.5, 10, 0xc8a040, { bottom: true });
+    k.sign(gx, 5.6, gz + 5.1, 8, 1.4, 0x3fd0ff, 0x9fe8ff, 0x1a1a1a);
+    k.beam('metal', [gx - 5, 4.2, gz - 1], [B / 2 + 0.2, deck0 - 1.4, gz - 1], 2.2, 0.3, 0xe8e8e4, true);
+    for (const dz of [-2, 0]) k.beam('metal', [gx - 5, 5.2, gz - 1 + dz + 1], [B / 2 + 0.2, deck0 - 0.4, gz - 1 + dz + 1], 0.08, 0.08, 0x8a8e92);
+    // quayside promenade: palms / trees, lamps, cars
     const tsp = k.ctx.theme.trees.includes('palm') ? 'palm' : themeTree(k.ctx, 'formal');
-    for (let i = 0; i < 6; i++) tree(k, tsp, -20 + (i % 3) * 20, 32 + Math.floor(i / 3) * 0, 0.8, i, i);
-    parkedCars(k, -20, D / 2 - 3, 20, D / 2 - 3, 2.8, Math.PI / 2, 0.8);
-    return ph + 2;
+    for (const sx of [-1, 1]) for (let i = 0; i < 4; i++) tree(k, tsp, sx * (W / 2 - 3), -32 + i * 16, 0.8, i + sx, i);
+    lampsAlong(k, [[-12.5, -38], [-12.5, 30]], 10, 4.4, 'classic', 0);
+    lampsAlong(k, [[12.5, 30], [12.5, -38]], 10, 4.4, 'classic', 0);
+    parkedCars(k, -20, 20, -20, D / 2 - 2, 2.8, Math.PI / 2, 0.8);
+    crowd(k, 8, 24, 12, 8, 8);
+    return deckY(0.8) + 24.5;
   },
 
   farm_coop(k) {
@@ -559,9 +625,5 @@ function taxi2(k: Kit, x: number, z: number): void {
   car(k, x, z, 0, 0xf5c518);
   k.at(x, 0, z, 0, () => k.box('emissive', -0.2, 1.55, 0, 0.35, 0.22, 0.7, 0xfff2b0));
 }
-
-void bush; void person; void officeBlock; void treeGrove; void parkingLot; void _unused; void conveyor; void V3Ref;
-type V3Ref = V3;
-function V3Ref(): void {}
 
 export const CIVIC_MODELS = models(M);

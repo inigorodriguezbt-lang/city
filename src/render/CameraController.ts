@@ -343,10 +343,12 @@ export class CameraController {
       for (let iter = 0; iter < 3; iter++) {
         const cp = Math.cos(need), sp = Math.sin(need);
         let req = need;
-        for (let i = 1; i <= 6; i++) {
-          const t = i / 6;
+        // the boom may not dip into terrain; the required clearance grows from
+        // 0 at the focus (which sits on the ground) to CLEARANCE at the camera
+        for (let i = 1; i <= 8; i++) {
+          const t = Math.sqrt(i / 8);
           const px = fx + sy * cp * d * t, pz = fz + cy * cp * d * t;
-          const ground = this.groundAt(px, pz) + CLEARANCE;
+          const ground = this.groundAt(px, pz) + CLEARANCE * t;
           const y = fy + sp * d * t;
           if (y < ground) {
             const ratio = THREE.MathUtils.clamp((ground - fy) / (d * t), -1, 1);

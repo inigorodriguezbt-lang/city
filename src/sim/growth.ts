@@ -13,7 +13,7 @@ import type { SimContext } from './context';
 import { buildDaysFor } from './lifecycle';
 import { bsim, newBSim } from './state';
 import { capacityOf, zoneMeta } from './zonemeta';
-import { DENSIFY_INTERVAL, MAX_SPAWNS_PER_TICK, RESOURCE_THRESHOLD, SPAWN_SAMPLES } from './tuning';
+import { DENSIFY_INTERVAL, MAX_SPAWNS_PER_TICK, RESOURCE_THRESHOLD, SPAWN_SAMPLES, UNFIT_RETRY_DAYS } from './tuning';
 
 interface Lot {
   x: number;
@@ -105,7 +105,7 @@ export class Growth {
     const lot = this.findLot(x, y, z);
     if (!lot) {
       // this cell cannot host any lot right now; drop it until something changes nearby
-      cs.remove(bestI);
+      cs.markUnfit(bestI, UNFIT_RETRY_DAYS);
       return 0;
     }
     const b = this.spawn(lot, z, 1, 0);
