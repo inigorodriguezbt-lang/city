@@ -68,7 +68,7 @@ export function openLoadDialog(ctx: MenuCtx): void {
     render();
   }, 'Sort saves');
 
-  const fileInput = h('input', { type: 'file', accept: '.urbis,application/octet-stream', multiple: true, class: 'mn-hidden-file', tabIndex: -1 }) as HTMLInputElement;
+  const fileInput = h('input', { type: 'file', accept: '.urbis,.json,application/octet-stream,application/json', multiple: true, class: 'mn-hidden-file', tabIndex: -1 }) as HTMLInputElement;
   fileInput.addEventListener('change', () => {
     const files = Array.from(fileInput.files ?? []);
     fileInput.value = '';
@@ -319,7 +319,7 @@ export function openLoadDialog(ctx: MenuCtx): void {
     let okCount = 0;
     let lastId: string | null = null;
     for (const f of files) {
-      if (!/\.urbis$/i.test(f.name) && f.type && f.type !== 'application/octet-stream') {
+      if (!/\.urbis(\.json)?$/i.test(f.name) && f.type && f.type !== 'application/octet-stream' && f.type !== 'application/json') {
         ctx.notify(`“${f.name}” is not a .urbis city file.`, 'bad');
         continue;
       }

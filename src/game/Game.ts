@@ -3,6 +3,7 @@
 // Owned by the integrator.
 // ─────────────────────────────────────────────────────────────────────────────
 import { EventBus } from '../core/EventBus';
+import { dataUrlToBlob, offerDownload } from '../core/download';
 import type { GameEvents } from '../core/events';
 import { MAX_SPEED_LEVEL, SPEEDS } from '../core/constants';
 import { Layer, RoadType, type MapSettings } from '../core/types';
@@ -335,11 +336,13 @@ export class Game {
 
   async downloadScreenshot(): Promise<void> {
     const url = await this.renderer.screenshot();
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${this.world?.settings.cityName ?? 'urbis'}-${Date.now()}.jpg`;
-    a.click();
-    this.audio.play('click');
-    this.ui.toast('Screenshot saved', 'good');
+    const name = `${(this.world?.settings.cityName ?? 'urbis').replace(/[\\/:*?"<>|]+/g, '_')}-${Date.now()}.jpg`;
+    const outcome = await offerDownload(name, dataUrlToBlob(url));
+    if (outcome === 'saved') {
+      this.audio.play('click');
+      this.ui.toast('Screenshot saved', 'good');
+    } else if (outcome === 'failed') {
+      this.ui.toast('This browser blocked the screenshot download', 'warning');
+    }
   }
 }

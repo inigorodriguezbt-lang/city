@@ -11,6 +11,7 @@
 import type { Game } from '../game/Game';
 import type { World } from '../world/World';
 import { formatMoney } from '../core/util';
+import { inArtifactViewer, offerDownload, type DownloadOutcome } from '../core/download';
 import {
   SAVE_EXTENSION, SAVE_MIME, SaveFormatError, buildWorld, decodeSave, describeSaveError, looksLikeSave, serializeWorld,
 } from './serialize';
@@ -449,10 +450,8 @@ export class SaveManager {
       if (cam) ext.camera = cam;
       const thumbnail = await this.captureThumbnail();
       const bytes = await serializeWorld(w, { meta: { name: w.settings.cityName, cityId: ext.cityId, thumbnail, savedAt: Date.now() } });
-      const file = fileName(w.settings.cityName);
-      downloadBytes(bytes, file);
-      this.game.audio.play('click');
-      this.toast(`Exported ${file} (${formatBytes(bytes.length)})`, 'good');
+      const file = exportName(fileName(w.settings.cityName));
+      this.reportExport(await downloadBytes(bytes, file), file, bytes.length);
     } catch (e) {
       console.error('[save] export failed', e);
       this.toast(`Could not export: ${describeSaveError(e)}`, 'danger');
@@ -468,10 +467,19 @@ export class SaveManager {
       return;
     }
     const base = meta.name && meta.name !== meta.cityName && !meta.auto ? `${meta.cityName} - ${meta.name}` : meta.cityName;
-    const file = fileName(base);
-    downloadBytes(bytes, file);
-    this.game.audio.play('click');
-    this.toast(`Exported ${file} (${formatBytes(bytes.length)})`, 'good');
+    const file = exportName(fileName(base));
+    this.reportExport(await downloadBytes(bytes, file), file, bytes.length);
+  }
+
+  private reportExport(outcome: DownloadOutcome, file: string, size: number): void {
+    if (outcome === 'saved') {
+      this.game.audio.play('click');
+      this.toast(`Exported ${file} (${formatBytes(size)})`, 'good');
+    } else if (outcome === 'declined') {
+      this.toast('Export cancelled', 'info');
+    } else {
+      this.toast('This browser blocked the download. Your cities are still saved in the browser.', 'warning');
+    }
   }
 
   async importFile(file: File): Promise<SaveMeta | null> {
@@ -479,7 +487,7 @@ export class SaveManager {
     try {
       if (!file || file.size === 0) throw new SaveFormatError('The file is empty.', 'not-a-save');
       if (file.size > 1024 * 1024 * 1024) throw new SaveFormatError('The file is too large to be an URBIS save.', 'not-a-save');
-      const bytes = new Uint8Array(await file.arrayBuffer());
+      const bytes = unwrapExport(new Uint8Array(await file.arrayBuffer()));
       if (!looksLikeSave(bytes)) throw new SaveFormatError(`“${file.name}” is not an URBIS save (.urbis).`, 'not-a-save');
       const decoded = await decodeSave(bytes);
       const world = buildWorld(decoded); // full validation
@@ -649,18 +657,39 @@ export function fileName(base: string): string {
   return clean + SAVE_EXTENSION;
 }
 
-export function downloadBytes(bytes: Uint8Array, name: string): void {
-  const blob = new Blob([bytes as Uint8Array<ArrayBuffer>], { type: SAVE_MIME });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  a.rel = 'noopener';
-  a.style.display = 'none';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+/** Wrapper used where only text formats can be offered (the artifact viewer
+ *  allows .json downloads but not .urbis): the binary save as base64. */
+const WRAP_FORMAT = 'urbis-save';
+
+/** export filename: `.urbis`, or `.urbis.json` inside the artifact viewer */
+export function exportName(file: string): string {
+  return inArtifactViewer() ? file + '.json' : file;
+}
+
+/** Offer save bytes as a download (JSON-wrapped inside the artifact viewer). */
+export function downloadBytes(bytes: Uint8Array, name: string): Promise<DownloadOutcome> {
+  if (name.endsWith('.json')) {
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    const doc = JSON.stringify({ format: WRAP_FORMAT, version: 1, encoding: 'base64', data: btoa(bin) });
+    return offerDownload(name, new Blob([doc], { type: 'application/json' }));
+  }
+  return offerDownload(name, new Blob([bytes as Uint8Array<ArrayBuffer>], { type: SAVE_MIME }));
+}
+
+/** Accept both raw .urbis bytes and the .urbis.json wrapper. */
+export function unwrapExport(bytes: Uint8Array): Uint8Array {
+  if (bytes.length < 2 || bytes[0] !== 0x7b /* { */) return bytes;
+  try {
+    const doc = JSON.parse(new TextDecoder().decode(bytes)) as { format?: string; encoding?: string; data?: string };
+    if (doc.format !== WRAP_FORMAT || doc.encoding !== 'base64' || typeof doc.data !== 'string') return bytes;
+    const bin = atob(doc.data);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  } catch {
+    return bytes;
+  }
 }
 
 export function formatBytes(n: number): string {
